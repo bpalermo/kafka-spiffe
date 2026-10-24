@@ -18,19 +18,20 @@ The setup it is written for: a single Kafka 4 broker (`spiffe://nas.palermo.dev/
 
 ## 2. Architecture
 
-```
-            Workload API (unix socket)
-                     │  FetchX509SVID stream
-                     ▼
-              ┌─────────────┐   one per process and socket, shared, ref-counted
-              │ X509Source  │──► X509Context snapshot: SVID chain, key, bundles by trust domain
-              └─────────────┘         │ on each update: a new SSLContext, built off the handshake path
-                     │                ▼
-   ┌─────────────────┴──────────┐   ┌──────────────────────────┐
-   │ SpiffeSslEngineFactory     │   │ SpiffePrincipalBuilder   │
-   │ ssl.engine.factory.class   │   │ principal.builder.class  │
-   │ brokers and clients        │   │ brokers                  │
-   └────────────────────────────┘   └──────────────────────────┘
+```mermaid
+flowchart TD
+    api["Workload API<br/>(Unix domain socket)"]
+    source["X509Source<br/>one per process and socket, shared, reference-counted"]
+    snapshot["X509Context snapshot<br/>SVID chain, private key, bundles by trust domain"]
+    ctx["SSLContext<br/>one per snapshot, built off the handshake path"]
+    factory["SpiffeSslEngineFactory<br/><code>ssl.engine.factory.class</code><br/>brokers and clients"]
+    builder["SpiffePrincipalBuilder<br/><code>principal.builder.class</code><br/>brokers"]
+
+    api -- "FetchX509SVID stream" --> source
+    source -- "each update" --> snapshot
+    snapshot --> ctx
+    ctx -- "new handshakes" --> factory
+    factory -. "verified peer certificate" .-> builder
 ```
 
 ### The Kafka extension points
