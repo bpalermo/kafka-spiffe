@@ -58,6 +58,8 @@ class GaugeMBeanTest {
         GaugeMBean.builder("second").longAttribute("v", "v", () -> 2L).register(name);
     assertEquals(2L, ManagementFactory.getPlatformMBeanServer().getAttribute(name, "v"));
     first.close();
+    first.close();
+    assertEquals(2L, ManagementFactory.getPlatformMBeanServer().getAttribute(name, "v"));
     second.close();
     assertFalse(ManagementFactory.getPlatformMBeanServer().isRegistered(name));
   }

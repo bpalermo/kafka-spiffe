@@ -90,4 +90,60 @@ class X509SourceRegistryTest {
       Files.deleteIfExists(directory);
     }
   }
+
+  @Test
+  void sourcesOfOneSocketHaveAnMBeanEachAndBackoffAloneSharesOne() throws Exception {
+    Assumptions.assumeTrue(Epoll.isAvailable(), "the fake Workload API needs Netty's epoll");
+    Path directory = Files.createTempDirectory(Path.of("/tmp"), "id");
+    try (FakeWorkloadApi api = FakeWorkloadApi.start(directory.resolve("agent.sock"))) {
+      api.publish(
+          new FakeWorkloadApi.Response()
+              .svid(FakeWorkloadApi.Svid.of(OWN.svid("/a"), OWN, "a"))
+              .svid(FakeWorkloadApi.Svid.of(OWN.svid("/b"), OWN, "b")));
+      X509SourceRegistry registry =
+          new X509SourceRegistry(Clock.fixed(TestPki.NOW, ZoneOffset.UTC), "kafka.spiffe.ident");
+      javax.management.MBeanServer server =
+          java.lang.management.ManagementFactory.getPlatformMBeanServer();
+      X509Source.Settings first = X509Source.Settings.of(api.socket());
+      X509Source.Settings slower =
+          new X509Source.Settings(
+              api.socket(),
+              "",
+              null,
+              java.util.Set.of(),
+              Duration.ofSeconds(1),
+              Duration.ofSeconds(60));
+      X509Source.Settings hinted =
+          new X509Source.Settings(
+              api.socket(),
+              "b",
+              null,
+              java.util.Set.of(),
+              Duration.ofMillis(500),
+              Duration.ofSeconds(30));
+      X509MaterialSource a = registry.acquire(first);
+      X509MaterialSource sameIdentity = registry.acquire(slower);
+      X509MaterialSource b = registry.acquire(hinted);
+      assertEquals(2, registry.size());
+      assertEquals(
+          "spiffe://example.org/a", a.awaitFirst(Duration.ofSeconds(10)).svid().id().toString());
+      assertEquals(
+          "spiffe://example.org/b", b.awaitFirst(Duration.ofSeconds(10)).svid().id().toString());
+      assertSame(a.current(), sameIdentity.current());
+      javax.management.ObjectName plain =
+          X509Source.objectName("kafka.spiffe.ident", first.identity());
+      javax.management.ObjectName withHint =
+          X509Source.objectName("kafka.spiffe.ident", hinted.identity());
+      org.junit.jupiter.api.Assertions.assertNotEquals(plain, withHint);
+      assertEquals(1L, server.getAttribute(plain, "updates-total"));
+      assertEquals(1L, server.getAttribute(withHint, "updates-total"));
+      a.close();
+      sameIdentity.close();
+      b.close();
+      org.junit.jupiter.api.Assertions.assertFalse(server.isRegistered(plain));
+      org.junit.jupiter.api.Assertions.assertFalse(server.isRegistered(withHint));
+    } finally {
+      Files.deleteIfExists(directory);
+    }
+  }
 }

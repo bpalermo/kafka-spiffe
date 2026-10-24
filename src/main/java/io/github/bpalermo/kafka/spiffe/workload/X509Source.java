@@ -52,8 +52,8 @@ public final class X509Source implements X509MaterialSource {
   private static final Logger LOG = LoggerFactory.getLogger(X509Source.class);
 
   /**
-   * How a source is set up. Two sources of equal settings are the same source ({@link
-   * X509SourceRegistry}).
+   * How a source is set up. Settings of equal {@link #identity()} share one source ({@link
+   * X509SourceRegistry}), whatever their backoff.
    *
    * @param socket the agent's Unix domain socket
    * @param svidHint pick the SVID with this hint; empty for none
@@ -82,12 +82,28 @@ public final class X509Source implements X509MaterialSource {
       }
     }
 
+    /** What makes two sources different: everything but the backoff. */
+    public Identity identity() {
+      return new Identity(socket, svidHint, svidId, bundleTrustDomains);
+    }
+
     /** A socket's settings with the defaults: the first SVID, every bundle, 500 ms to 30 s. */
     public static Settings of(Path socket) {
       return new Settings(
           socket, "", null, Set.of(), Duration.ofMillis(500), Duration.ofSeconds(30));
     }
   }
+
+  /**
+   * Which snapshots a source produces: from which socket, which SVID, which bundles.
+   *
+   * @param socket the agent's socket
+   * @param svidHint the hint the SVID is picked by, or empty
+   * @param svidId the ID the SVID is picked by, or null
+   * @param bundleTrustDomains the trust domains whose bundles are kept, or empty for all
+   */
+  public record Identity(
+      Path socket, String svidHint, SpiffeId svidId, Set<TrustDomain> bundleTrustDomains) {}
 
   private final Settings settings;
   private final Clock clock;
@@ -214,14 +230,14 @@ public final class X509Source implements X509MaterialSource {
 
   /**
    * Registers the source's MBean, {@code <domain>:type=x509-source,socket=<path>} (design, section
-   * 7), and returns what unregisters it.
+   * 7), and returns what unregisters it. A source that picks its SVID or narrows its bundles adds
+   * {@code svid-hint}, {@code svid-id} or {@code bundles} to the name, so that two sources on one
+   * socket have an MBean each.
    *
    * @throws JMException if the platform MBean server refuses it
    */
   public GaugeMBean.Registration registerMBean(String domain) throws JMException {
-    ObjectName name =
-        new ObjectName(
-            domain + ":type=x509-source,socket=" + ObjectName.quote(settings.socket().toString()));
+    ObjectName name = objectName(domain, settings.identity());
     return GaugeMBean.builder("The Workload API source of " + settings.socket())
         .booleanAttribute("connected", "Whether the stream is open", () -> connected)
         .longAttribute("updates-total", "Responses that replaced the snapshot", updates::get)
@@ -324,6 +340,30 @@ public final class X509Source implements X509MaterialSource {
       Duration doubled = delay.multipliedBy(2);
       delay = doubled.compareTo(settings.maxBackoff()) > 0 ? settings.maxBackoff() : doubled;
     }
+  }
+
+  /** The MBean name of a source of {@code identity}. */
+  static ObjectName objectName(String domain, Identity identity) throws JMException {
+    StringBuilder name =
+        new StringBuilder(domain)
+            .append(":type=x509-source,socket=")
+            .append(ObjectName.quote(identity.socket().toString()));
+    if (!identity.svidHint().isEmpty()) {
+      name.append(",svid-hint=").append(ObjectName.quote(identity.svidHint()));
+    }
+    if (identity.svidId() != null) {
+      name.append(",svid-id=").append(ObjectName.quote(identity.svidId().toString()));
+    }
+    if (!identity.bundleTrustDomains().isEmpty()) {
+      name.append(",bundles=")
+          .append(
+              ObjectName.quote(
+                  identity.bundleTrustDomains().stream()
+                      .map(TrustDomain::name)
+                      .sorted()
+                      .collect(Collectors.joining(","))));
+    }
+    return new ObjectName(name.toString());
   }
 
   /** A delay between half and all of {@code delay}. */

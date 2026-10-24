@@ -103,7 +103,14 @@ class X509SourceTest {
     source = X509Source.start(settings(), CLOCK);
     X509Context first = source.awaitFirst(WAIT);
     List<X509Context> seen = new CopyOnWriteArrayList<>();
-    source.addListener(seen::add);
+    // awaitFirst returns before the listeners of the first snapshot are called, so this listener
+    // may be called with it too: only the rotation counts.
+    source.addListener(
+        snapshot -> {
+          if (snapshot != first) {
+            seen.add(snapshot);
+          }
+        });
     api.publish(response(OWN.svid("/broker")));
     eventually(() -> seen.size() == 1, "the rotation");
     assertNotSame(first, source.current());

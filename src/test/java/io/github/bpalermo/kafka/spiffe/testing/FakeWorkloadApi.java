@@ -75,6 +75,7 @@ public final class FakeWorkloadApi implements AutoCloseable {
   private final List<StreamObserver<byte[]>> streams = new CopyOnWriteArrayList<>();
   private final List<Status> failures = new CopyOnWriteArrayList<>();
   private final AtomicInteger calls = new AtomicInteger();
+  private final Object lock = new Object();
   private volatile byte[] latest;
   private volatile Status failAll;
   private EventLoopGroup group;
@@ -108,9 +109,11 @@ public final class FakeWorkloadApi implements AutoCloseable {
 
   /** Sends raw octets as a response message: for malformed responses. */
   public void publish(byte[] message) {
-    latest = message;
-    for (StreamObserver<byte[]> stream : streams) {
-      stream.onNext(message);
+    synchronized (lock) {
+      latest = message;
+      for (StreamObserver<byte[]> stream : streams) {
+        stream.onNext(message);
+      }
     }
   }
 
@@ -126,10 +129,12 @@ public final class FakeWorkloadApi implements AutoCloseable {
 
   /** Ends every open stream with {@code status}. */
   public void endStreams(Status status) {
-    for (StreamObserver<byte[]> stream : streams) {
-      stream.onError(status.asRuntimeException());
+    synchronized (lock) {
+      for (StreamObserver<byte[]> stream : streams) {
+        stream.onError(status.asRuntimeException());
+      }
+      streams.clear();
     }
-    streams.clear();
   }
 
   /** Stops serving; the socket goes away, open streams end. */
@@ -203,11 +208,15 @@ public final class FakeWorkloadApi implements AutoCloseable {
       responses.onError(failure.asRuntimeException());
       return;
     }
-    byte[] message = latest;
-    if (message != null) {
-      responses.onNext(message);
+    // Under the lock, so that no response published, and no end of streams, falls between the
+    // replay of the newest response and the subscription.
+    synchronized (lock) {
+      byte[] message = latest;
+      if (message != null) {
+        responses.onNext(message);
+      }
+      streams.add(responses);
     }
-    streams.add(responses);
   }
 
   /** One SVID of a response. */

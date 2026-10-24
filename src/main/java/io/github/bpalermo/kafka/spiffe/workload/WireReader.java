@@ -81,14 +81,15 @@ final class WireReader {
 
   private int length() throws WireException {
     long length = varint();
-    if (length > end - position) {
+    // A ten-octet varint can be negative as a long; it is as invalid as one beyond the message.
+    if (length < 0 || length > end - position) {
       throw new WireException("a field of " + length + " octets beyond the message");
     }
     return (int) length;
   }
 
   private void advance(int count) throws WireException {
-    if (count > end - position) {
+    if (count < 0 || count > end - position) {
       throw new WireException("a field beyond the message");
     }
     position += count;

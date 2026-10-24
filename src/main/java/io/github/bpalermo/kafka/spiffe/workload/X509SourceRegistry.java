@@ -29,7 +29,7 @@ public final class X509SourceRegistry {
 
   private final Clock clock;
   private final String jmxDomain;
-  private final Map<X509Source.Settings, Entry> sources = new HashMap<>();
+  private final Map<X509Source.Identity, Entry> sources = new HashMap<>();
 
   /** A registry of its own, for tests, without MBeans. */
   public X509SourceRegistry(Clock clock) {
@@ -52,10 +52,17 @@ public final class X509SourceRegistry {
 
   /**
    * A handle on the source of {@code settings}, started if it is not running. Closing the handle
-   * releases it; the source stops when the last handle is closed.
+   * releases it; the source stops when the last handle is closed. Settings of the same identity
+   * share the source started first, and its backoff.
    */
   public synchronized X509MaterialSource acquire(X509Source.Settings settings) {
-    Entry entry = sources.get(settings);
+    X509Source.Identity identity = settings.identity();
+    Entry entry = sources.get(identity);
+    if (entry != null && !entry.source.settings().equals(settings)) {
+      LOG.info(
+          "The Workload API source of {} is shared and keeps the backoff it started with",
+          settings.socket());
+    }
     if (entry == null) {
       entry = new Entry(X509Source.start(settings, clock));
       if (jmxDomain != null) {
@@ -65,10 +72,10 @@ public final class X509SourceRegistry {
           LOG.warn("Cannot register the MBean of the source of {}", settings.socket(), e);
         }
       }
-      sources.put(settings, entry);
+      sources.put(identity, entry);
     }
     entry.references++;
-    return new Handle(entry, settings);
+    return new Handle(entry, identity);
   }
 
   /** How many sources are running. */
@@ -76,9 +83,9 @@ public final class X509SourceRegistry {
     return sources.size();
   }
 
-  private synchronized void release(Entry entry, X509Source.Settings settings) {
+  private synchronized void release(Entry entry, X509Source.Identity identity) {
     if (--entry.references == 0) {
-      sources.remove(settings);
+      sources.remove(identity);
       if (entry.mbean != null) {
         entry.mbean.close();
       }
@@ -98,12 +105,12 @@ public final class X509SourceRegistry {
 
   private final class Handle implements X509MaterialSource {
     private final Entry entry;
-    private final X509Source.Settings settings;
+    private final X509Source.Identity identity;
     private boolean released;
 
-    Handle(Entry entry, X509Source.Settings settings) {
+    Handle(Entry entry, X509Source.Identity identity) {
       this.entry = entry;
-      this.settings = settings;
+      this.identity = identity;
     }
 
     @Override
@@ -134,7 +141,7 @@ public final class X509SourceRegistry {
         }
         released = true;
       }
-      release(entry, settings);
+      release(entry, identity);
     }
   }
 }

@@ -1,6 +1,7 @@
 package io.github.bpalermo.kafka.spiffe.metrics;
 
 import java.lang.management.ManagementFactory;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -69,22 +70,31 @@ public final class GaugeMBean implements DynamicMBean {
      */
     public Registration register(ObjectName name) throws JMException {
       MBeanServer server = ManagementFactory.getPlatformMBeanServer();
-      if (server.isRegistered(name)) {
-        server.unregisterMBean(name);
+      GaugeMBean mbean = new GaugeMBean(description, attributes);
+      synchronized (OWNERS) {
+        if (server.isRegistered(name)) {
+          server.unregisterMBean(name);
+        }
+        server.registerMBean(mbean, name);
+        OWNERS.put(name, mbean);
       }
-      server.registerMBean(new GaugeMBean(description, attributes), name);
-      return new Registration(server, name);
+      return new Registration(server, name, mbean);
     }
   }
 
-  /** A registered MBean; closing it unregisters it. */
+  /**
+   * A registered MBean; closing it unregisters it, unless another registration has since replaced
+   * it under the same name, whose MBean stays. Closing twice does nothing more.
+   */
   public static final class Registration implements AutoCloseable {
     private final MBeanServer server;
     private final ObjectName name;
+    private final GaugeMBean mbean;
 
-    private Registration(MBeanServer server, ObjectName name) {
+    private Registration(MBeanServer server, ObjectName name, GaugeMBean mbean) {
       this.server = server;
       this.name = name;
+      this.mbean = mbean;
     }
 
     public ObjectName name() {
@@ -93,15 +103,24 @@ public final class GaugeMBean implements DynamicMBean {
 
     @Override
     public void close() {
-      try {
-        if (server.isRegistered(name)) {
-          server.unregisterMBean(name);
+      synchronized (OWNERS) {
+        if (OWNERS.get(name) != mbean) {
+          return;
         }
-      } catch (JMException e) {
-        // Already gone: nothing to undo.
+        OWNERS.remove(name);
+        try {
+          if (server.isRegistered(name)) {
+            server.unregisterMBean(name);
+          }
+        } catch (JMException e) {
+          // Already gone: nothing to undo.
+        }
       }
     }
   }
+
+  /** Which MBean each name was last registered with, so a stale handle leaves its successor. */
+  private static final Map<ObjectName, GaugeMBean> OWNERS = new HashMap<>();
 
   @Override
   public Object getAttribute(String name) throws AttributeNotFoundException {

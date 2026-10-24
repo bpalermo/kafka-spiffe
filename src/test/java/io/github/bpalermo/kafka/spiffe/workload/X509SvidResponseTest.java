@@ -93,6 +93,20 @@ class X509SvidResponseTest {
             new byte[] {(byte) 0x80}, // a varint cut short
             new byte[] {0x00}, // field number 0
             new byte[] {0x0b}, // wire type 3, a group
+            // An unknown length-delimited field whose ten-octet length is negative as a long.
+            new byte[] {
+              0x7a,
+              (byte) 0xff,
+              (byte) 0xff,
+              (byte) 0xff,
+              (byte) 0xff,
+              (byte) 0xff,
+              (byte) 0xff,
+              (byte) 0xff,
+              (byte) 0xff,
+              (byte) 0xff,
+              0x01
+            },
             svid(
                 "spiffe://example.org/a",
                 issued.leaf().getEncoded(),
