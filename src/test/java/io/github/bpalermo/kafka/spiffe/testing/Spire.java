@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.List;
+import java.util.logging.Logger;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
@@ -35,6 +36,15 @@ public final class Spire implements AutoCloseable {
 
   private static final String AGENT_ID = "/agent";
 
+  /**
+   * rw-r--r--: the server image runs as UID 1000, which need not be the test's, so its
+   * configuration must be readable by others.
+   */
+  private static final int READABLE = 0x1a4;
+
+  /** Where the containers' output goes: the test log, through java.util.logging's console. */
+  private static final Logger LOG = Logger.getLogger(Spire.class.getName());
+
   private final String trustDomain;
   private final Network network = Network.newNetwork();
   private final Path socketDirectory;
@@ -48,8 +58,11 @@ public final class Spire implements AutoCloseable {
         new GenericContainer<>(SERVER_IMAGE)
             .withNetwork(network)
             .withNetworkAliases("spire-server")
+            .withLogConsumer(
+                frame -> LOG.info("[spire-server] " + frame.getUtf8String().stripTrailing()))
             .withCopyToContainer(
-                MountableFile.forHostPath(write("server.conf", serverConfig(trustDomain))),
+                MountableFile.forHostPath(
+                    write("server.conf", serverConfig(trustDomain)), READABLE),
                 "/opt/spire/conf/server/server.conf")
             .withCommand("-config", "/opt/spire/conf/server/server.conf")
             .waitingFor(
@@ -96,8 +109,10 @@ public final class Spire implements AutoCloseable {
     agent =
         new GenericContainer<>(AGENT_IMAGE)
             .withNetwork(network)
+            .withLogConsumer(
+                frame -> LOG.info("[spire-agent] " + frame.getUtf8String().stripTrailing()))
             .withCopyToContainer(
-                MountableFile.forHostPath(write("agent.conf", agentConfig(trustDomain))),
+                MountableFile.forHostPath(write("agent.conf", agentConfig(trustDomain)), READABLE),
                 "/opt/spire/conf/agent/agent.conf")
             .withFileSystemBind(
                 socketDirectory.toString(), "/run/spire/sockets", BindMode.READ_WRITE)
