@@ -33,7 +33,7 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 | `src/test/java/...` | Their tests, one `java_junit_test` per package; `testing` holds the shared test PKI and handshake helpers |
 | `matrix/` | One test per Kafka version, run against that version's jars; broker tests will live beside it |
 | `bazel/java` | `JAVACOPTS`, the JUnit macro (`junit.bzl`), the per-Kafka-version macro (`kafka.bzl`) |
-| `bazel/maven` | Maven lockfiles, and the provided (neverlink) and Netty epoll targets |
+| `bazel/maven` | Maven lockfiles, and the provided (neverlink) and Netty epoll (test-only) targets |
 | `bazel/lint`, `bazel/format` | PMD aspect and the formatters |
 
 ## Things to know before changing code
@@ -41,7 +41,7 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 - **Java 17 bytecode.** `--java_language_version=17` with the JDK 17 runtime as the compile-time class library, so a later API fails to compile. Build tools run on JDK 25. `--config=jdk21` and `--config=jdk25` change only the runtime of the tests. `bazel run` uses JDK 25 (google-java-format needs it).
 - **Compile against `kafka-clients` 3.0.0.** It is in `@maven` and reaches code only through `//bazel/maven:kafka_clients_provided` (neverlink, never shipped); `slf4j-api` likewise (`:slf4j_api_provided`, 1.7.36). A test that needs the classes at run time names them in `runtime_deps`.
 - **One Maven repository per Kafka version.** `@kafka_3_0`, `@kafka_3_3`, `@kafka_3_9`, `@kafka_4_0`, `@kafka_4_4` in `MODULE.bazel`, each with its own lockfile in `bazel/maven`, so a version's tests never see another's jars. Tests for a version use `kafka_version_test` (`//bazel/java:kafka.bzl`). Add a version by adding it to the dict in `MODULE.bazel` and to `KAFKA_VERSIONS` in `kafka.bzl`, creating an empty `bazel/maven/kafka_X_Y_install.json`, adding it to `use_repo`, and pinning. Kafka 4.x moved internal classes (for example `AppInfoParser`): do not rely on non-public classes across versions.
-- **Dependencies.** After editing `maven.install`, run the matching `REPIN=1 bazel run @<repo>//:pin`. `--config=ci` fails on lockfile drift. Test-only artifacts (JUnit, BouncyCastle, protobuf-java) are never dependencies of a library target.
+- **Dependencies.** After editing `maven.install`, run the matching `REPIN=1 bazel run @<repo>//:pin`. `--config=ci` fails on lockfile drift. Test-only artifacts (JUnit, BouncyCastle, protobuf-java, gRPC and Netty) are never dependencies of a library target: the library depends on nothing but the provided `kafka-clients` and `slf4j-api` (design section 3), and speaks HTTP/2 itself (`workload.h2`). A test that needs a transitive Maven artifact names it in `maven.install` first; Bazel hides transitive ones.
 - **New test classes** run only once they are listed in the target's `test_classes` (`java_junit_test` selects classes explicitly; `--test_filter` has no effect).
 - **Lint.** First-party Java compiles with `-Xlint:all -Werror` (`JAVACOPTS`; every first-party target sets `javacopts = JAVACOPTS`) and Error Prone, so a warning is a build failure. PMD lints `java_library` and `java_binary` sources under `--config=lint` (ruleset `pmd.xml`; tests are not visited). Exclude a rule in `pmd.xml` with its reason; do not scatter suppressions.
 - **Placeholders.** A package not yet implemented holds a `Placeholder` class and test so the build and lint have something to check. Delete it with the package's first real class.

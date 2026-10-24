@@ -12,6 +12,8 @@
     "io.grpc:grpc-netty": -1903287645,
     "io.grpc:grpc-stub": -1249313841,
     "io.netty:netty-buffer": 1648289272,
+    "io.netty:netty-codec-http2": 1126916671,
+    "io.netty:netty-common": -172431581,
     "io.netty:netty-handler": 1976738774,
     "io.netty:netty-transport": 1284261557,
     "io.netty:netty-transport-classes-epoll": 1061134245,
