@@ -6,4 +6,12 @@ java_library(
     srcs = glob(["*.java"]),
     javacopts = JAVACOPTS,
     visibility = ["//visibility:public"],
+    exports = ["//src/main/java/io/github/bpalermo/kafka/spiffe/x509"],
+    deps = [
+        "//bazel/maven:slf4j_api_provided",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/metrics",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload/h2",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
+    ],
 )

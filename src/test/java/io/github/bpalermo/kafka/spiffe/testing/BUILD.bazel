@@ -6,11 +6,36 @@ load("//bazel/java:defs.bzl", "JAVACOPTS")
 java_library(
     name = "testing",
     testonly = True,
-    srcs = glob(["*.java"]),
+    srcs = [
+        "Handshake.java",
+        "TestPki.java",
+    ],
     javacopts = JAVACOPTS,
     visibility = ["//src/test:__subpackages__"],
     deps = [
         "@maven//:org_bouncycastle_bcpkix_jdk18on",
         "@maven//:org_bouncycastle_bcprov_jdk18on",
+    ],
+)
+
+# A Workload API for tests: grpc-java on Netty's epoll on a Unix domain socket, with
+# responses encoded by protobuf's CodedOutputStream.
+java_library(
+    name = "fake_workload_api",
+    testonly = True,
+    srcs = ["FakeWorkloadApi.java"],
+    javacopts = JAVACOPTS,
+    visibility = ["//src/test:__subpackages__"],
+    exports = [":testing"],
+    runtime_deps = ["//bazel/maven:netty_epoll_native"],
+    deps = [
+        ":testing",
+        "@maven//:com_google_protobuf_protobuf_java",
+        "@maven//:io_grpc_grpc_api",
+        "@maven//:io_grpc_grpc_netty",
+        "@maven//:io_grpc_grpc_stub",
+        "@maven//:io_netty_netty_transport",
+        "@maven//:io_netty_netty_transport_classes_epoll",
+        "@maven//:io_netty_netty_transport_native_unix_common",
     ],
 )

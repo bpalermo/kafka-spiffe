@@ -3,19 +3,22 @@ load("//bazel/java:junit.bzl", "java_junit_test")
 
 java_junit_test(
     name = "workload_test",
+    size = "medium",
     srcs = glob(["*.java"]),
     javacopts = JAVACOPTS,
     test_classes = [
-        "io.github.bpalermo.kafka.spiffe.workload.PlaceholderTest",
-        "io.github.bpalermo.kafka.spiffe.workload.TransportTest",
+        "io.github.bpalermo.kafka.spiffe.workload.X509SourceRegistryTest",
+        "io.github.bpalermo.kafka.spiffe.workload.X509SourceTest",
+        "io.github.bpalermo.kafka.spiffe.workload.X509SvidResponseTest",
     ],
-    runtime_deps = [
-        "//bazel/maven:netty_epoll_native",
-        "@maven//:io_grpc_grpc_netty",
-    ],
+    runtime_deps = ["@maven//:org_slf4j_slf4j_api"],
     deps = [
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
         "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
-        "@maven//:io_grpc_grpc_netty",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
+        "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+        "@maven//:com_google_protobuf_protobuf_java",
+        "@maven//:io_grpc_grpc_api",
         "@maven//:io_netty_netty_transport_classes_epoll",
         "@maven//:org_junit_jupiter_junit_jupiter_api",
     ],

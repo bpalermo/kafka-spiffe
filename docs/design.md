@@ -256,7 +256,7 @@ A peer whose certificate verifies but that the principal allow-list does not cov
 - **`PERMISSION_DENIED`**: the agent has no registration entry for this workload yet. Retried, with a warning that says so.
 - **`INVALID_ARGUMENT`**: not retried; an error log and a metric.
 - **An update that fails validation** (no SVID, key not matching the leaf, leaf not valid now, malformed ID, empty bundle) is rejected, and the current snapshot stays.
-- **Expiry.** A gauge of the SVID's remaining lifetime; a warning when no rotation has come by two thirds of it (SPIRE rotates at about half), an error once it has expired. What happens after that is described below.
+- **Expiry.** A gauge of the SVID's remaining lifetime (`svid-ttl-remaining-ms`); a warning when no rotation has come by two thirds of it (SPIRE rotates at about half), an error once it has expired, each logged once per snapshot. They are checked whenever the snapshot is read (every new connection's engine) and whenever the stream ends, so no thread of its own is needed: a missed rotation means a broken stream, and a broker or client in use reads its snapshot. What happens after that is described below.
 - **Open connections are not re-authenticated.** Kafka re-authenticates only SASL connections (`connections.max.reauth.ms`): a peer authenticated with an SVID that has since expired keeps its connection and principal until it disconnects.
 
 ### An SVID that expires
