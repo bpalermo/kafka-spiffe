@@ -15,6 +15,7 @@ import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import javax.net.ssl.SSLContext;
@@ -37,10 +38,7 @@ class SnapshotSslContextTest {
     X509Context snapshot =
         new X509Context(X509Svid.of(issued.chain(), issued.key(), ""), BundleSet.of(BOTH));
     return SnapshotSslContext.create(
-        snapshot,
-        peers,
-        new SnapshotSslContext.Settings(protocol, null, Duration.ofHours(1)),
-        CLOCK);
+        snapshot, peers, new SnapshotSslContext.Settings(protocol, null), CLOCK);
   }
 
   private static SSLContext broker(TestPki.Issued issued) throws GeneralSecurityException {
@@ -154,33 +152,97 @@ class SnapshotSslContextTest {
     assertThrows(SSLException.class, () -> Handshake.run(anonymous, broker));
   }
 
-  @Test
-  void capsTheSessionTimeoutAtTheSvidsRemainingLifetime() {
-    Instant expires = TestPki.NOW.plus(Duration.ofMinutes(10));
-    assertEquals(
-        600, SnapshotSslContext.sessionTimeoutSeconds(Duration.ofHours(1), expires, TestPki.NOW));
-    assertEquals(
-        60, SnapshotSslContext.sessionTimeoutSeconds(Duration.ofMinutes(1), expires, TestPki.NOW));
-    assertEquals(
-        1,
-        SnapshotSslContext.sessionTimeoutSeconds(
-            Duration.ofHours(1), expires, expires.plusSeconds(5)));
+  /** A client engine that caches its session for the broker at a host and port, as Kafka's do. */
+  private static Handshake.Sessions toBroker(SSLContext client, SSLContext broker)
+      throws SSLException {
+    var clientEngine = client.createSSLEngine("broker.example.org", 9093);
+    clientEngine.setUseClientMode(true);
+    var brokerEngine = broker.createSSLEngine();
+    brokerEngine.setUseClientMode(false);
+    brokerEngine.setNeedClientAuth(true);
+    return Handshake.run(clientEngine, brokerEngine);
   }
 
+  /** A clock a test moves. */
+  private static final class MovableClock extends Clock {
+    private volatile Instant now = TestPki.NOW;
+
+    void set(Instant instant) {
+      now = instant;
+    }
+
+    @Override
+    public Instant instant() {
+      return now;
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return this;
+    }
+  }
+
+  /**
+   * After the broker's SVID has expired by the client's clock, a full handshake fails and only a
+   * resumed session could succeed: a resumption skips the certificate checks.
+   */
   @Test
-  void theContextsSessionsAreCapped() throws Exception {
-    SSLContext context = broker(BROKER_CA.svid("/broker"));
-    assertEquals(1800, context.getServerSessionContext().getSessionTimeout());
-    assertEquals(1800, context.getClientSessionContext().getSessionTimeout());
+  void noSessionIsResumedOnceASecondHasPassed() throws Exception {
+    for (String protocol : List.of("TLSv1.2", "TLSv1.3")) {
+      MovableClock clientClock = new MovableClock();
+      TestPki.Issued c = CLIENT_CA.svid("/c");
+      X509Context clientSnapshot =
+          new X509Context(X509Svid.of(c.chain(), c.key(), ""), BundleSet.of(BOTH));
+      SSLContext client =
+          SnapshotSslContext.create(
+              clientSnapshot,
+              SpiffeIdMatcher.none().withIds(List.of("spiffe://example.org/broker")),
+              new SnapshotSslContext.Settings(protocol, null),
+              clientClock);
+      SSLContext broker =
+          context(
+              BROKER_CA.svid("/broker"),
+              SpiffeIdMatcher.none().withTrustDomains(List.of("k8s.example.org")),
+              protocol);
+      toBroker(client, broker);
+
+      clientClock.set(TestPki.NOW.plus(Duration.ofHours(2)));
+      // Within the second the session is resumed: the test can tell a resumption apart.
+      try {
+        toBroker(client, broker);
+      } catch (SSLException e) {
+        throw new AssertionError(protocol + ": an immediate reconnection was not resumed", e);
+      }
+
+      Thread.sleep(1500);
+      assertEquals(
+          PeerRejectedException.Reason.CHAIN,
+          refusalOf(() -> toBroker(client, broker)),
+          protocol + ": a session was resumed after its peer's SVID expired");
+    }
+  }
+
+  private interface HandshakeAttempt {
+    void run() throws SSLException;
+  }
+
+  private static PeerRejectedException.Reason refusalOf(HandshakeAttempt attempt) {
+    SSLException e = assertThrows(SSLException.class, attempt::run);
+    for (Throwable t = e; t != null; t = t.getCause()) {
+      if (t instanceof PeerRejectedException rejected) {
+        return rejected.reason();
+      }
+    }
+    throw new AssertionError("the handshake failed for another reason", e);
   }
 
   @Test
   void settingsAreChecked() {
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> new SnapshotSslContext.Settings("", null, Duration.ofHours(1)));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> new SnapshotSslContext.Settings("TLS", null, Duration.ZERO));
+    assertThrows(IllegalArgumentException.class, () -> new SnapshotSslContext.Settings("", null));
   }
 }

@@ -56,6 +56,10 @@ public final class Handshake {
     server.beginHandshake();
     for (int round = 0; round < MAX_ROUNDS; round++) {
       if (done(client) && done(server)) {
+        // What is still in flight after the handshake, such as a TLS 1.3 session ticket, is read
+        // as a connection would read it.
+        drain(client, toClient, sink);
+        drain(server, toServer, sink);
         return new Sessions(client.getSession(), server.getSession());
       }
       step(client, toServer, toClient, empty, sink);
@@ -67,6 +71,18 @@ public final class Handshake {
   private static boolean done(SSLEngine engine) {
     HandshakeStatus status = engine.getHandshakeStatus();
     return status == HandshakeStatus.NOT_HANDSHAKING || status == HandshakeStatus.FINISHED;
+  }
+
+  private static void drain(SSLEngine engine, ByteBuffer in, ByteBuffer sink) throws SSLException {
+    in.flip();
+    while (in.hasRemaining()) {
+      sink.clear();
+      SSLEngineResult result = engine.unwrap(in, sink);
+      if (result.bytesConsumed() == 0) {
+        break;
+      }
+    }
+    in.compact();
   }
 
   /** Lets one engine send what it has to {@code out}, and read what waits in {@code in}. */

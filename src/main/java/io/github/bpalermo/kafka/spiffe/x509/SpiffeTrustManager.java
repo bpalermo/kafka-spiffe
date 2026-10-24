@@ -3,24 +3,32 @@ package io.github.bpalermo.kafka.spiffe.x509;
 import io.github.bpalermo.kafka.spiffe.id.SpiffeId;
 import io.github.bpalermo.kafka.spiffe.id.SpiffeIdMatcher;
 import io.github.bpalermo.kafka.spiffe.id.TrustDomain;
+import java.io.IOException;
 import java.net.Socket;
+import java.security.AlgorithmConstraints;
+import java.security.AlgorithmParameters;
+import java.security.CryptoPrimitive;
 import java.security.GeneralSecurityException;
 import java.security.cert.CertPath;
 import java.security.cert.CertPathValidator;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
+import java.security.cert.PKIXCertPathValidatorResult;
 import java.security.cert.PKIXParameters;
 import java.security.cert.TrustAnchor;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 import javax.net.ssl.X509ExtendedTrustManager;
 
 /**
@@ -37,8 +45,10 @@ import javax.net.ssl.X509ExtendedTrustManager;
  *   <li>The ID must be one the allow-list matches.
  * </ol>
  *
- * <p>Every check is made whatever the engine or socket asks for: endpoint identification is
- * ignored. The time is the clock's, so that tests can set it.
+ * <p>Endpoint identification is ignored, whatever the engine or socket asks for. Their algorithm
+ * constraints ({@link SSLParameters#getAlgorithmConstraints()}) are applied to every certificate of
+ * the chain and to the authority's key, since the JDK adds no checks around an {@link
+ * X509ExtendedTrustManager}. The time is the clock's, so that tests can set it.
  *
  * <p>{@link #getAcceptedIssuers()} is empty: a server asks for a client certificate without naming
  * authorities, so a client whose SVID is issued by an intermediate the server does not hold still
@@ -50,6 +60,7 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   private static final String CLIENT_AUTH = "1.3.6.1.5.5.7.3.2";
   private static final String ANY_EXTENDED_KEY_USAGE = "2.5.29.37.0";
   private static final X509Certificate[] NO_ISSUERS = {};
+  private static final Set<CryptoPrimitive> SIGNATURE = EnumSet.of(CryptoPrimitive.SIGNATURE);
 
   private final BundleSet bundles;
   private final SpiffeIdMatcher peers;
@@ -81,6 +92,19 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
    * @throws PeerRejectedException saying why the peer is refused
    */
   public SpiffeId verify(X509Certificate[] chain, boolean server) throws PeerRejectedException {
+    return verify(chain, server, null);
+  }
+
+  /**
+   * Verifies a peer's chain for one purpose under a connection's algorithm constraints, and returns
+   * its SPIFFE ID.
+   *
+   * @param server whether the peer is a server (otherwise a client)
+   * @param constraints the connection's {@link SSLParameters#getAlgorithmConstraints()}, or null
+   * @throws PeerRejectedException saying why the peer is refused
+   */
+  public SpiffeId verify(X509Certificate[] chain, boolean server, AlgorithmConstraints constraints)
+      throws PeerRejectedException {
     if (chain == null || chain.length == 0) {
       throw new PeerRejectedException(
           PeerRejectedException.Reason.MALFORMED_SVID, "the peer presented no certificate");
@@ -103,7 +127,10 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
                     new PeerRejectedException(
                         PeerRejectedException.Reason.UNKNOWN_TRUST_DOMAIN,
                         "no bundle of the trust domain of " + id));
-    validate(id, chain, bundle);
+    TrustAnchor anchor = validate(id, chain, bundle);
+    if (constraints != null) {
+      permitted(id, chain, anchor, constraints);
+    }
     purpose(id, leaf, server);
     if (!peers.matches(id)) {
       throw new PeerRejectedException(
@@ -112,7 +139,8 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
     return id;
   }
 
-  private void validate(SpiffeId id, X509Certificate[] chain, X509Bundle bundle)
+  /** Validates the chain against the bundle, and returns the authority it ends at. */
+  private TrustAnchor validate(SpiffeId id, X509Certificate[] chain, X509Bundle bundle)
       throws PeerRejectedException {
     Set<TrustAnchor> trustAnchors = anchors.get(bundle.trustDomain());
     if (trustAnchors.isEmpty()) {
@@ -130,7 +158,9 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
       PKIXParameters parameters = new PKIXParameters(trustAnchors);
       parameters.setRevocationEnabled(false);
       parameters.setDate(Date.from(clock.instant()));
-      CertPathValidator.getInstance("PKIX").validate(certPath, parameters);
+      return ((PKIXCertPathValidatorResult)
+              CertPathValidator.getInstance("PKIX").validate(certPath, parameters))
+          .getTrustAnchor();
     } catch (GeneralSecurityException e) {
       throw new PeerRejectedException(
           PeerRejectedException.Reason.CHAIN,
@@ -142,6 +172,67 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
               + e.getMessage(),
           e);
     }
+  }
+
+  /**
+   * Applies a connection's algorithm constraints to the chain, as the JDK's own trust manager does:
+   * the JDK does not add these checks around an {@link X509ExtendedTrustManager}, and PKIX applies
+   * only {@code jdk.certpath.disabledAlgorithms}.
+   */
+  private static void permitted(
+      SpiffeId id, X509Certificate[] chain, TrustAnchor anchor, AlgorithmConstraints constraints)
+      throws PeerRejectedException {
+    for (X509Certificate certificate : chain) {
+      if (!constraints.permits(SIGNATURE, certificate.getPublicKey())) {
+        throw new PeerRejectedException(
+            PeerRejectedException.Reason.CHAIN,
+            "the chain of "
+                + id
+                + " has a "
+                + certificate.getPublicKey().getAlgorithm()
+                + " key the connection's algorithm constraints forbid");
+      }
+      String algorithm = certificate.getSigAlgName();
+      if (!constraints.permits(SIGNATURE, algorithm, parameters(certificate))) {
+        throw new PeerRejectedException(
+            PeerRejectedException.Reason.CHAIN,
+            "the chain of "
+                + id
+                + " is signed with "
+                + algorithm
+                + ", which the connection's algorithm constraints forbid");
+      }
+    }
+    if (!constraints.permits(SIGNATURE, anchor.getTrustedCert().getPublicKey())) {
+      throw new PeerRejectedException(
+          PeerRejectedException.Reason.CHAIN,
+          "the authority of " + id + " has a key the connection's algorithm constraints forbid");
+    }
+  }
+
+  /** A certificate's signature parameters (RSASSA-PSS has some), or null. */
+  private static AlgorithmParameters parameters(X509Certificate certificate) {
+    byte[] encoded = certificate.getSigAlgParams();
+    if (encoded == null) {
+      return null;
+    }
+    try {
+      AlgorithmParameters parameters = AlgorithmParameters.getInstance(certificate.getSigAlgName());
+      parameters.init(encoded);
+      return parameters;
+    } catch (GeneralSecurityException | IOException e) {
+      return null;
+    }
+  }
+
+  private static AlgorithmConstraints constraints(SSLEngine engine) {
+    return engine == null ? null : engine.getSSLParameters().getAlgorithmConstraints();
+  }
+
+  private static AlgorithmConstraints constraints(Socket socket) {
+    return socket instanceof SSLSocket ssl
+        ? ssl.getSSLParameters().getAlgorithmConstraints()
+        : null;
   }
 
   private static void purpose(SpiffeId id, X509Certificate leaf, boolean server)
@@ -180,13 +271,13 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   @Override
   public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket)
       throws CertificateException {
-    verify(chain, false);
+    verify(chain, false, constraints(socket));
   }
 
   @Override
   public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
       throws CertificateException {
-    verify(chain, false);
+    verify(chain, false, constraints(engine));
   }
 
   @Override
@@ -198,13 +289,13 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   @Override
   public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket)
       throws CertificateException {
-    verify(chain, true);
+    verify(chain, true, constraints(socket));
   }
 
   @Override
   public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
       throws CertificateException {
-    verify(chain, true);
+    verify(chain, true, constraints(engine));
   }
 
   @Override

@@ -194,4 +194,63 @@ class SpiffeTrustManagerTest {
         CertificateException.class,
         () -> manager.checkClientTrusted(forged, "EC", (java.net.Socket) null));
   }
+
+  /** Algorithm constraints that forbid what {@code forbidden} names: an algorithm or key type. */
+  private static javax.net.ssl.SSLEngine engineForbidding(String forbidden) throws Exception {
+    javax.net.ssl.SSLEngine engine = javax.net.ssl.SSLContext.getDefault().createSSLEngine();
+    javax.net.ssl.SSLParameters parameters = engine.getSSLParameters();
+    parameters.setAlgorithmConstraints(
+        new java.security.AlgorithmConstraints() {
+          @Override
+          public boolean permits(
+              java.util.Set<java.security.CryptoPrimitive> primitives,
+              String algorithm,
+              java.security.AlgorithmParameters parameters) {
+            return !algorithm.equalsIgnoreCase(forbidden);
+          }
+
+          @Override
+          public boolean permits(
+              java.util.Set<java.security.CryptoPrimitive> primitives, java.security.Key key) {
+            return !key.getAlgorithm().equalsIgnoreCase(forbidden);
+          }
+
+          @Override
+          public boolean permits(
+              java.util.Set<java.security.CryptoPrimitive> primitives,
+              String algorithm,
+              java.security.Key key,
+              java.security.AlgorithmParameters parameters) {
+            return permits(primitives, algorithm, parameters) && permits(primitives, key);
+          }
+        });
+    engine.setSSLParameters(parameters);
+    return engine;
+  }
+
+  @Test
+  void appliesTheConnectionsAlgorithmConstraints() throws Exception {
+    X509Certificate[] chain = chain(OWN.intermediate().svid("/broker"));
+    SpiffeTrustManager manager = manager();
+    manager.checkServerTrusted(chain, "EC", engineForbidding("SHA1withRSA"));
+
+    PeerRejectedException signature =
+        assertThrows(
+            PeerRejectedException.class,
+            () -> manager.checkServerTrusted(chain, "EC", engineForbidding("SHA256withECDSA")));
+    assertEquals(Reason.CHAIN, signature.reason());
+
+    PeerRejectedException key =
+        assertThrows(
+            PeerRejectedException.class,
+            () -> manager.checkClientTrusted(chain, "EC", engineForbidding("EC")));
+    assertEquals(Reason.CHAIN, key.reason());
+  }
+
+  @Test
+  void withoutAConnectionNoConstraintsAreAdded() throws CertificateException {
+    X509Certificate[] chain = chain(OWN.svid("/broker"));
+    manager().checkServerTrusted(chain, "EC", (java.net.Socket) null);
+    manager().checkServerTrusted(chain, "EC", (javax.net.ssl.SSLEngine) null);
+  }
 }

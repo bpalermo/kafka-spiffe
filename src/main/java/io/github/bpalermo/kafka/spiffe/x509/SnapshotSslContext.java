@@ -6,8 +6,6 @@ import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -16,11 +14,21 @@ import javax.net.ssl.TrustManager;
  * The JDK context of one snapshot: it presents the snapshot's SVID and verifies peers with a {@link
  * SpiffeTrustManager} over the snapshot's bundles.
  *
- * <p>One context per snapshot means one session cache per snapshot: a session is never resumed
- * across a rotation, and no handshake mixes the key of one snapshot with the trust of another. The
- * session timeout is capped at the SVID's remaining lifetime, so no session outlives it.
+ * <p>Sessions are not resumed: both session contexts time sessions out after {@value
+ * #SESSION_TIMEOUT_SECONDS} second, the shortest the JDK allows (it reads zero as no limit). A
+ * session timeout counts from each session's creation, so no timeout can stop a session made late
+ * in an SVID's life from being resumed after that SVID, or the peer's, has expired, without either
+ * certificate being checked again; and a TLS 1.3 server hands out stateless tickets that no cache
+ * holds and nothing can invalidate. Kafka's connections are long-lived, so a full handshake on
+ * reconnecting costs little.
+ *
+ * <p>One context per snapshot: no handshake mixes the key of one snapshot with the trust of
+ * another.
  */
 public final class SnapshotSslContext {
+
+  /** The shortest session timeout the JDK has; zero would mean sessions never time out. */
+  static final int SESSION_TIMEOUT_SECONDS = 1;
 
   /** In-memory key store entries need a password; it protects nothing. */
   private static final char[] PASSWORD = "in-memory".toCharArray();
@@ -32,19 +40,15 @@ public final class SnapshotSslContext {
    *
    * @param protocol the {@link SSLContext} protocol, such as {@code TLSv1.3} or {@code TLS}
    * @param provider the JCA provider of the context, or null for the default
-   * @param sessionTimeout the longest a session may be resumed, before the SVID's lifetime caps it
    */
-  public record Settings(String protocol, String provider, Duration sessionTimeout) {
+  public record Settings(String protocol, String provider) {
 
-    /** TLS from the default provider, sessions of at most an hour. */
-    public static final Settings DEFAULT = new Settings("TLS", null, Duration.ofHours(1));
+    /** TLS from the default provider. */
+    public static final Settings DEFAULT = new Settings("TLS", null);
 
     public Settings {
       if (protocol == null || protocol.isEmpty()) {
         throw new IllegalArgumentException("a protocol is required");
-      }
-      if (sessionTimeout == null || sessionTimeout.isNegative() || sessionTimeout.isZero()) {
-        throw new IllegalArgumentException("the session timeout must be positive");
       }
     }
   }
@@ -55,7 +59,7 @@ public final class SnapshotSslContext {
    * The context of {@code snapshot}.
    *
    * @param peers the SPIFFE IDs accepted of peers
-   * @param clock the time chains are validated at and the SVID's remaining lifetime measured from
+   * @param clock the time peers' chains are validated at
    * @throws GeneralSecurityException if the JDK cannot make the context
    */
   public static SSLContext create(
@@ -81,21 +85,8 @@ public final class SnapshotSslContext {
         keyManagers.getKeyManagers(),
         new TrustManager[] {new SpiffeTrustManager(snapshot.bundles(), peers, clock)},
         null);
-    int timeout =
-        sessionTimeoutSeconds(settings.sessionTimeout(), svid.expiresAt(), clock.instant());
-    context.getClientSessionContext().setSessionTimeout(timeout);
-    context.getServerSessionContext().setSessionTimeout(timeout);
+    context.getClientSessionContext().setSessionTimeout(SESSION_TIMEOUT_SECONDS);
+    context.getServerSessionContext().setSessionTimeout(SESSION_TIMEOUT_SECONDS);
     return context;
-  }
-
-  /**
-   * The session timeout in seconds: the configured one, capped at what is left of the SVID's
-   * lifetime, and never below one second, since the JDK reads zero as no limit at all.
-   */
-  static int sessionTimeoutSeconds(Duration configured, Instant expiresAt, Instant now) {
-    Duration left = Duration.between(now, expiresAt);
-    Duration timeout = left.compareTo(configured) < 0 ? left : configured;
-    long seconds = Math.max(1, timeout.getSeconds());
-    return (int) Math.min(Integer.MAX_VALUE, seconds);
   }
 }
