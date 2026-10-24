@@ -49,5 +49,4 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 
 ## Workflow
 
-- `main` is protected: changes go through a pull request, and the `ci` check must pass.
-- Do not commit `.claude/` or `CLAUDE.md`.
+- Changes go through a pull request, and the `ci` check must pass.
