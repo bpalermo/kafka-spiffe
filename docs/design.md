@@ -1,6 +1,6 @@
 # kafka-spiffe: design
 
-Status: draft, for review. Nothing is implemented yet.
+Status: approved. Nothing is implemented yet; the open questions in §10 are answered as the work reaches them.
 
 ## 1. Scope
 
