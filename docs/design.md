@@ -59,7 +59,7 @@ What A relies on, read from `kafka-clients` 4.3.1 and checked against 3.0.0 and 
 - The factory and the principal builder are created with `Utils.newInstance`, not as `Plugin<>`, so KIP-877 plugin metrics do not reach them. Metrics are JMX MBeans of their own (§7).
 - `KafkaPrincipalBuilder` extends `KafkaPrincipalSerde` from 4.2 on. Up to 4.1 it does not, and the channel builders hand the serde on only `if (principalBuilder instanceof KafkaPrincipalSerde)`, so the builder declares both interfaces (§5). Phase 0 ran it: on a 3.3 or 3.9 KRaft cluster a builder without the serde fails every forwarded request (`Cannot deserialize principal from request context`).
 - An exception from `createServerSslEngine` or `createClientSslEngine` fails only that connection: the broker's processor closes it and goes on, the client's `NetworkClient` retries on its backoff (phase 0, Q2). An exception from `build` closes the connection after the handshake, with no error the client can see (Q1).
-- `kafka-clients` (Java 8 bytecode in 3.x, 11 in 4.x) shades its own protobuf, so it brings nothing this library's dependencies clash with.
+- `kafka-clients` (Java 8 bytecode in 3.x, 11 in 4.x) shades its own protobuf, and the library has no dependencies of its own (§3), so nothing on a broker's or client's class path can clash with it.
 
 ### Kafka versions
 
@@ -91,19 +91,29 @@ One Bazel package per Java package, under `io.github.bpalermo.kafka.spiffe`:
 |---|---|---|
 | `id` | `SpiffeId`, a strict parser of the SPIFFE ID specification (lowercase trust domain of `[a-z0-9._-]`, path segments of `[A-Za-z0-9._-]`, no empty, `.` or `..` segment, no trailing slash, port, user info, query, fragment or percent-encoding); `TrustDomain`; `SpiffeIdMatcher` (exact IDs, trust domains, path globs where `*` is one whole segment and `**`, last only, one or more trailing segments) | JDK |
 | `x509` | `X509Svid`, `X509Bundle`, `BundleSet`, `X509Context` (the snapshot), `SvidLeaf` (the X.509-SVID leaf checks), `SvidValidator` (key matches leaf, validity, leaf constraints, own bundle present, no empty bundle), `SpiffeTrustManager` (per-trust-domain PKIX and the matcher; refusals carry a reason, `PeerRejectedException`), `SnapshotSslContext` | JDK |
-| `workload` | `WireReader` (the subset of the protobuf wire format the Workload API needs), `WorkloadApiClient` (`FetchX509SVID` with the `workload.spiffe.io: true` header), `X509Source` (the stream, reconnects with backoff and jitter, rejects a bad update and keeps the current snapshot, listeners, an injectable clock), `X509SourceRegistry` (one source per socket per process, reference-counted), `X509MaterialSource` (the interface another source of material, such as files, can implement) | gRPC, Netty |
+| `workload` | `WireReader` (the subset of the protobuf wire format the Workload API needs), `WorkloadApiClient` (`FetchX509SVID` with the `workload.spiffe.io: true` header), `X509Source` (the stream, reconnects with backoff and jitter, rejects a bad update and keeps the current snapshot, listeners, an injectable clock), `X509SourceRegistry` (one source per socket per process, reference-counted), `X509MaterialSource` (the interface another source of material, such as files, can implement) | JDK |
+| `workload.h2` | The client side of HTTP/2 and gRPC that one streaming call needs: `Http2Connection` (frames, settings, flow control, ping, goaway), `Hpack` (encoder and decoder, Huffman), `GrpcStream` (message framing, status from trailers) | JDK |
 | `kafka` | `SpiffeSslEngineFactory`, `SpiffePrincipalBuilder`, `SpiffeConfig` (a `ConfigDef`), `PrincipalMapper` | `kafka-clients` (provided) |
 | `kafka.jca` | Optional, later: `SpiffeSecurityProviderCreator` and key and trust manager factories over the same source | `kafka-clients` |
 | `metrics` | JMX MBeans, which can be turned off | JDK |
 
 ### The Workload API client
 
-The client is our own, not `java-spiffe`:
+The client is our own, not `java-spiffe` and not grpc-java:
 
-- The Workload API needs one streaming call and a handful of fields: `X509SVIDResponse` {`svids` = 1, `crl` = 2 (ignored), `federated_bundles` = 3} and `X509SVID` {`spiffe_id` = 1, `x509_svid` = 2, `x509_svid_key` = 3, `bundle` = 4, `hint` = 5}. A hand-written gRPC `MethodDescriptor` and a ~60-line reader of the wire format cover it, with no generated code and no protobuf-java.
-- `java-spiffe` brings grpc-protobuf, protobuf-java and nimbus-jose-jwt (for JWT-SVIDs, which are out of scope), and its provider's policy is JVM-wide. It stays as a test oracle: our parser and ID validation are checked against its test cases.
+- The Workload API needs one streaming call and a handful of fields: `X509SVIDResponse` {`svids` = 1, `crl` = 2 (ignored), `federated_bundles` = 3} and `X509SVID` {`spiffe_id` = 1, `x509_svid` = 2, `x509_svid_key` = 3, `bundle` = 4, `hint` = 5}. A ~60-line reader of the protobuf wire format covers them, with no generated code and no protobuf-java.
+- `java-spiffe` brings grpc-protobuf, protobuf-java and nimbus-jose-jwt (for JWT-SVIDs, which are out of scope), and its provider's policy is JVM-wide. It is not used, not even as a test oracle: the SPIFFE ID parser is tested against the specification's rules (phase 2).
+- **No gRPC, no Netty.** grpc-java reaches a Unix domain socket only through Netty's native epoll or kqueue transport. Netty clashes with the Netty 4.1 every 3.x broker carries in `libs/`, so it would have to be relocated in a shaded jar (phase 0 did it: 9.9 MB, with string constants, service files and the native library to rewrite), and its native library ties the jar to the platforms it ships for. The JDK has had Unix domain sockets since Java 16 (`SocketChannel.open(StandardProtocolFamily.UNIX)`), with no native code of ours, so the library speaks the little HTTP/2 and gRPC the call needs itself, and has no dependencies at all.
 
-The transport is grpc-java on Netty, with the native epoll transport for Unix domain sockets on linux-x86_64 and linux-aarch_64. Without protobuf that is still guava, perfmark and Netty: about 8–10 MB once shaded, which is accepted for a broker's class path. A client of our own over HTTP/2 and the JDK's Unix domain sockets (`SocketChannel.open(StandardProtocolFamily.UNIX)`) would weigh almost nothing, at the cost of owning HPACK and HTTP/2 framing. It is not needed: phase 0 loaded the relocated epoll transport beside Kafka 3.x's own Netty and on Alpine.
+What `workload.h2` implements, and no more:
+
+- **Connection.** A blocking `SocketChannel` to the agent's socket; HTTP/2 with prior knowledge (the client preface, no upgrade, no TLS); one stream per connection. One daemon thread per socket reads frames; writes are serialised under a lock.
+- **Frames.** `SETTINGS` (sent: `ENABLE_PUSH=0`, a 1 MiB `INITIAL_WINDOW_SIZE`; received ones acknowledged and honoured), `HEADERS` with `CONTINUATION`, `DATA` (padding stripped), `WINDOW_UPDATE` for the connection and the stream as received data is consumed, `PING` answered, `GOAWAY` and `RST_STREAM` ending the stream as `UNAVAILABLE` or with their error code, `PRIORITY` and unknown frame types ignored. A frame larger than the advertised maximum, or a protocol violation, closes the connection with `GOAWAY(PROTOCOL_ERROR)`.
+- **Headers.** HPACK (RFC 7541): requests are encoded as literals without indexing and without Huffman, which every decoder accepts; responses are decoded in full, with the static and dynamic tables, table size updates and Huffman decoding. Limits: a header list of at most 64 KiB, a dynamic table of the default 4 KiB.
+- **gRPC.** `POST /SpiffeWorkloadAPI/FetchX509SVID`, `content-type: application/grpc`, `te: trailers`, `grpc-accept-encoding: identity` and the `workload.spiffe.io: true` header; the request is one empty, length-prefixed message and `END_STREAM`. Response messages are length-prefixed (a compressed flag is refused, since none was offered) and may span `DATA` frames; a message over 16 MiB is refused. The status comes from the trailers (`grpc-status`, `grpc-message` percent-decoded), or from a trailers-only response; an HTTP status other than 200 maps as gRPC's HTTP-to-status table says.
+- **What the source sees.** A stream of responses, then a status: `UNAVAILABLE` (connection lost, `GOAWAY`, end of stream), `PERMISSION_DENIED`, `INVALID_ARGUMENT` and the rest, which §6 already handles.
+
+About 1,000 to 1,500 lines, most of them HPACK and frame handling. HTTP/2 is where subtle bugs live, so it is tested against the RFC's own vectors, against grpc-java as a server and against a real SPIRE agent (§9).
 
 ## 4. Configuration
 
@@ -267,7 +277,7 @@ The two behaviours:
 
 Neither weakens security: an expired SVID is refused by any peer with a correct clock, and its key is still the workload's own. Keeping it changes nothing on the Kafka side and recovers the same way; failing gives a clearer message where the problem is, and on a broker a less clear one for its clients. Keeping it is the default; `fail` is offered. The factory throws a `KafkaException`, never an `Error`, which Kafka's channel setup does not catch.
 
-Threads: one daemon event-loop thread per socket; a source closes when the last factory using it is closed.
+Threads: one daemon reader thread per socket; a source closes when the last factory using it is closed.
 
 ## 7. Observability
 
@@ -297,7 +307,7 @@ Logs go through slf4j, which Kafka provides: SPIFFE IDs, trust domains, expiry t
 
 ### Build
 
-A Bazel (bzlmod) repository: hermetic JDKs, `-Xlint:all -Werror`, Error Prone, PMD, google-java-format, JUnit on the console launcher, pinned Maven dependencies through rules_jvm_external. gRPC and Netty come from Maven; there are no protos to compile.
+A Bazel (bzlmod) repository: hermetic JDKs, `-Xlint:all -Werror`, Error Prone, PMD, google-java-format, JUnit on the console launcher, pinned Maven dependencies through rules_jvm_external. The library itself depends only on `kafka-clients` and `slf4j-api`, both provided; everything else in the Maven repositories is for tests. There are no protos to compile.
 
 **Bytecode: Java 17** (`--java_language_version=17`, compiled against the JDK 17 runtime so later APIs fail to compile). Java 17 is the oldest LTS a Kafka 4 broker runs on. Clients on Java 8 or 11, which Kafka 3.x and 4.x clients still allow, are not served, nor 3.x brokers on Java 11.
 
@@ -305,12 +315,14 @@ A Bazel (bzlmod) repository: hermetic JDKs, `-Xlint:all -Werror`, Error Prone, P
 
 ### Tests
 
-- **Unit**: the SPIFFE ID parser against the specification's cases and `java-spiffe`'s; matchers; the wire reader against bytes written by protobuf's `CodedOutputStream` (a test-only dependency) and recorded SPIRE responses; `SvidValidator` and `SpiffeTrustManager` with certificates generated in the test (BouncyCastle, test-only: CA leaves, several URI SANs, wrong key usage, expired chains), at a set clock; mapping rules; the serde against `DefaultKafkaPrincipalBuilder`.
-- **A fake Workload API**: a gRPC server on a Unix socket that checks the security header and pushes publications, and can be told to fail (`PERMISSION_DENIED`, `UNAVAILABLE`, a closed stream), to delay, to serve several SVIDs with hints, and to change federated bundles.
+- **Unit**: the SPIFFE ID parser against the specification's rules; matchers; the wire reader against bytes written by protobuf's `CodedOutputStream` (a test-only dependency) and recorded SPIRE responses; `SvidValidator` and `SpiffeTrustManager` with certificates generated in the test (BouncyCastle, test-only: CA leaves, several URI SANs, wrong key usage, expired chains), at a set clock; mapping rules; the serde against `DefaultKafkaPrincipalBuilder`.
+- **HTTP/2 and HPACK**: the decoder against every example of RFC 7541 Appendix C, with and without Huffman, and the Huffman table round trip; frames split at every byte boundary as reads would split them; padding, `CONTINUATION`, unknown frame types, oversized frames and protocol errors; flow control with responses far larger than the window.
+- **A fake Workload API**: grpc-java on Netty's epoll (test-only, so nothing of it ships), a server on a Unix socket that checks the security header and pushes publications, and can be told to fail (`PERMISSION_DENIED`, `UNAVAILABLE`, a closed stream, a `GOAWAY`, a reset stream, a trailers-only error), to delay, to serve several SVIDs with hints, to send a response of several megabytes, and to change federated bundles. Every client test runs against it, so our HTTP/2 meets grpc-java's.
+- **A real SPIRE agent** (tagged `e2e`): `spire-server` and `spire-agent` started by the test with Testcontainers (images pinned by digest), the agent joining with a token, registration entries created by the test, short SVIDs; the client fetches, follows rotations and reconnects across an agent restart. The same harness records one real SVID, chain and bundle as test fixtures, which the unit tests of `x509` and `workload` read, so the checks are known to accept what SPIRE issues. The targets need the Docker socket: tagged `e2e`, `requires-network` and `no-sandbox`, run only with `--config=e2e`.
 - **Engine pairs**, no broker: a client and a server `SSLEngine` from two factories, each on its own fake Workload API, handshaking in memory. Allowed and refused by ID, trust domain and pattern; a `k8s.example.org` client against an `example.org` broker, and a forged cross-trust-domain chain refused; a rotation, after which the next handshake presents the new SVID while the old session goes on, with no rebuild; bundle rotation; a federated bundle withdrawn; expiry; the validation handshake with an empty peer host.
 - **Kafka**: an in-process broker (Kafka's published test clusters, below), with broker and client on fake Workload APIs and ACLs on `Spiffe:spiffe://…` (and one on `User:`, for the setting); producing and consuming across client and broker rotations (SVIDs of seconds) with no new connections (`connection-creation-total`); the inter-broker listener on TLS; on KRaft, a request forwarded to the controller, for the serde; on ZooKeeper, `AclAuthorizer`. The same tests run on each Kafka version of the matrix below, and a client of one version against a broker of another (a 3.x client and a 4.x broker, and the reverse).
-- **End to end** (tagged `e2e`): two real SPIRE servers, federated, with agents; an `apache/kafka` broker (the newest 3.x and 4.x images: `3.9.2`, JDK 21, and the newest 4.x, JDK 25; both Alpine and KRaft) with only the shaded jar added, through `CLASSPATH`, and the `spiffe.*` keys as `KAFKA_SPIFFE_*` environment variables; a client container; 60-second SVIDs, so the run sees several rotations. Images exist only from 3.7 and start KRaft, so ZooKeeper is covered by the in-process tests, not end to end.
-- **The shaded jar**: a handshake with only `kafka-spiffe-all` and `kafka-clients` on the class path; no unrelocated classes outside the library's own and `org.apache.kafka`/`org.slf4j`; the relocated epoll library loads, beside a 3.x broker's `libs/` (whose Netty 4.1 breaks an unrelocated epoll transport), on linux-x86_64 and linux-aarch_64, and on Alpine.
+- **End to end** (tagged `e2e`), on the same Testcontainers harness: two real SPIRE servers, federated, with agents; an `apache/kafka` broker (the newest 3.x and 4.x images: `3.9.2`, JDK 21, and the newest 4.x, JDK 25; both Alpine and KRaft) with only the library's jar added, through `CLASSPATH`, and the `spiffe.*` keys as `KAFKA_SPIFFE_*` environment variables; a client container; 60-second SVIDs, so the run sees several rotations. Images exist only from 3.7 and start KRaft, so ZooKeeper is covered by the in-process tests, not end to end.
+- **The jar**: a handshake with only the library's jar, `kafka-clients` and `slf4j-api` on the class path, and beside a 3.x and a 4.x broker's `libs/`; the jar holds no class outside `io.github.bpalermo.kafka.spiffe`.
 
 The in-process test clusters, from Maven Central (`org.apache.kafka` unless said otherwise; phase 0 started each with a TLS listener and these classes):
 
@@ -334,15 +346,14 @@ The matrix is not a full product:
 | Broker tests, ZooKeeper (`AclAuthorizer`) | 17 and 25 | 3.0, 3.9 |
 | Clients across versions | 17 | a 3.0 client and a newest 4.x broker; a newest 4.x client and a 3.9 broker |
 | End to end | the image's | newest 3.x and 4.x images |
-| The shaded jar | 17 | 3.0, the newest 4.x |
+| The jar | 17 | 3.0, the newest 4.x |
 
 Each Kafka version is its own `maven.install` repository, so the tests of one version never see another's jars; the library is built once, against 3.0.0. Phase 0 ran every version in the matrix, 3.0.2 included, as a TLS broker and client on JDK 17, 21 and 25, so 17 and 25 bound the range and 21 adds nothing.
 
 ### Packaging
 
-- `io.github.bpalermo:kafka-spiffe`: the library, with gRPC and Netty as ordinary dependencies, and `kafka-clients` (3.0 or later) and `slf4j-api` provided. For applications that manage gRPC and Netty themselves.
-- `io.github.bpalermo:kafka-spiffe-all`: shaded, for a broker's class path. Everything it bundles is relocated under `io.github.bpalermo.kafka.spiffe.shaded`: `io.grpc`, `io.netty`, `com.google` (Guava, `failureaccess`, Gson, which grpc-core brings, Error Prone and J2ObjC annotations), `io.perfmark`, `javax.annotation` (jsr305), `android.annotation`, `org.codehaus.mojo.animal_sniffer` and `org.jspecify`; `org.apache.kafka` and `org.slf4j` are not. Relocation is mandatory for Netty, since every 3.x broker has Netty 4.1 (ZooKeeper's, 4.1.73 to 4.1.125) in `libs/`; the rest is relocated because some `libs/` carry `error_prone_annotations`, `jsr305` or `jspecify`. 4.x `libs/` hold no Netty, Guava or gRPC; `protobuf-java` 3.25.5 (3.9 and 4.x) does not matter, since the library brings none. String constants are relocated with the classes (gRPC's hard-coded provider names; Netty's `io.netty.*` system properties, which become `io.github.bpalermo.kafka.spiffe.shaded.io.netty.*`). The epoll native libraries are renamed to the relocated prefix Netty looks for, `META-INF/native/libio_github_bpalermo_kafka_spiffe_shaded_netty_transport_native_epoll_<arch>.so`, and gRPC's `META-INF/services` files renamed and rewritten (or the channel built without ServiceLoader). `META-INF/native-image`, BlockHound's service file and the dependencies' `META-INF/maven` are dropped. Phase 0 did this with maven-shade-plugin (9.9 MB); the Bazel rule of phase 6 must do the same three things.
-- Published to Maven Central, and the shaded jar as a release asset, signed with cosign. `Automatic-Module-Name` in the manifest. Semantic versioning; Kafka 3.0 is the floor, and raising it is a major version.
+- `io.github.bpalermo:kafka-spiffe`: one jar, for brokers and clients alike. Its only dependencies are `kafka-clients` (3.0 or later) and `slf4j-api`, both provided by whoever runs it; it bundles nothing, so there is nothing to relocate and no native library, and it runs wherever the JDK has Unix domain sockets and SPIRE serves the Workload API on one: Linux, Alpine included, and macOS. On Windows SPIRE uses a named pipe, which is not served. A broker takes it on its class path through `CLASSPATH` or in `libs/`.
+- Published to Maven Central, and the jar as a release asset, signed with cosign. `Automatic-Module-Name` in the manifest. Semantic versioning; Kafka 3.0 is the floor, and raising it is a major version.
 
 ## 10. Plan
 
@@ -352,29 +363,29 @@ Each Kafka version is its own `maven.install` repository, so the tests of one ve
    - `kafka-configs --alter` with `listener.name.X.spiffe.*`: accepted and stored as sensitive. Not applied while the broker runs unless the factory lists the key as reconfigurable, and loaded at the next restart on a ZooKeeper broker. `spiffe.*` keys are static by the library's policy.
    - `listener.name.X.principal.builder.class`: honoured. But a listener-prefixed unknown key is dropped when the same key is also set without the prefix, so per-listener principal keys are `spiffe.principal.listener.<listener>.*`.
    - A `Spiffe` principal end to end: ACLs from `kafka-acls.sh`, `super.users` and a request forwarded to the controller all work, on ZooKeeper (3.0, 3.9) and KRaft (3.3, 3.9, 4.0, 4.4); on 3.x KRaft a builder without `KafkaPrincipalSerde` fails forwarded requests.
-   - grpc-netty's epoll transport relocated: loads, beside 3.x `libs/` and on Alpine. No HTTP/2 fallback is needed; the relocation list grows (§9).
+   - grpc-netty's epoll transport relocated: loads, beside 3.x `libs/` and on Alpine. Superseded since: the library has its own HTTP/2 client and no Netty, so nothing is shaded (§3).
    - In-process test clusters: published for every version; coordinates in §9.
    - JDKs: every version from 3.0.2 runs TLS brokers and clients on 17, 21 and 25. The `apache/kafka:3.9.2` image (JDK 21, KRaft) serves the 3.x end-to-end run.
    - `libs/`: Netty 4.1 in every 3.x, none in 4.x; no Guava or gRPC anywhere.
    - Found on the way: the principal builder is per connection and `build` per request; a broker makes a factory per network thread per listener and per inter-broker client.
 1. The repository: `MODULE.bazel` (one Maven repository per Kafka version), `.bazelrc` (Java 17, the JDK matrix), lint, the JUnit macro, CI, `AGENTS.md`.
 2. `id` and `x509`, with their tests. Done.
-3. `workload`: the reader, the client, `X509Source`, the registry, the fake Workload API, backoff and expiry, JMX.
+3. `workload` and `workload.h2`: HTTP/2 and HPACK, the gRPC stream, the wire reader, `X509Source`, the registry, the fake Workload API (grpc-java, test-only), the Testcontainers SPIRE harness and the recorded real-SVID fixtures, backoff and expiry, JMX. The Netty and gRPC artifacts leave the library's dependencies (they stay, test-only, for the fake).
 4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests.
 5. `SpiffePrincipalBuilder`: serde, mapping rules, per-listener policy, an authorizer test.
-6. The shaded jar and its test, publishing, the operator's documentation (broker and client configuration, ACL migration).
-7. End to end with federated SPIRE, and a migration guide from spiffe-helper: ACLs for the new principals first, then the broker, then the clients one at a time.
+6. The jar and its test, publishing, the operator's documentation (broker and client configuration, ACL migration).
+7. End to end with federated SPIRE, on phase 3's Testcontainers harness with an `apache/kafka` container, and a migration guide from spiffe-helper: ACLs for the new principals first, then the broker, then the clients one at a time.
 8. Later, optional: the JCA provider; allow-lists changed at run time, from a source other than Kafka's dynamic configuration, which never passes `spiffe.*` keys to the factory (phase 0).
 
 ### Decided
 
 - **Java 17 bytecode**, tested on every LTS up to the latest. Java 8 and 11 clients are not served.
 - **Kafka 3.0 and later**, brokers and clients, ZooKeeper and KRaft, tested on each (§9).
-- **The shaded jar's size** (about 10 MB) is acceptable, so the transport is grpc-java on Netty.
 - **The principal** is the full SPIFFE ID, of type `Spiffe` (§5). Grouping workloads is done with mapping rules.
 - **A peer that gets no principal** gets `Spiffe:spiffe-unauthorized`: an authorization error is clearer to its owner than a closed connection (§5). There is no `reject` (phase 0).
 - **An expired SVID** is kept and presented by default; `spiffe.svid.expired=fail` refuses to create engines instead, which phase 0 showed fails only the connection (§6).
-- **The transport** is grpc-java on Netty's epoll, relocated; phase 0 showed it loads in the shaded jar, so there is no HTTP/2 client of our own.
+- **The transport** is our own HTTP/2 and gRPC client over the JDK's Unix domain sockets (§3), not grpc-java on Netty: no dependencies, so no shaded jar, nothing to relocate, no native library, and one jar for every platform. It replaces the earlier choice of a relocated grpc-java, which phase 0 showed would work, at the cost of owning HPACK and HTTP/2 framing.
+- **Tests against real SPIRE** use Testcontainers, started by the test itself, for phase 3's agent tests and fixtures and phase 7's end-to-end run.
 - **`spiffe.*` keys are static**, and per-listener principal keys are `spiffe.principal.listener.<listener>.*` (§4).
 - Deployment questions (a particular broker's listeners, SPIRE agent socket, attestation and federation) belong to the deployment, not to this design.
 - Other projects adopting the library do so once it is published, in their own repositories.
