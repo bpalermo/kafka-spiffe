@@ -1,0 +1,13 @@
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+load("//bazel/java:junit.bzl", "java_junit_test")
+
+java_junit_test(
+    name = "x509_test",
+    srcs = glob(["*.java"]),
+    javacopts = JAVACOPTS,
+    test_classes = ["io.github.bpalermo.kafka.spiffe.x509.PlaceholderTest"],
+    deps = [
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
+        "@maven//:org_junit_jupiter_junit_jupiter_api",
+    ],
+)

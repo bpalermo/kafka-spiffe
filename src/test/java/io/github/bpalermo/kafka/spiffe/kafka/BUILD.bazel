@@ -1,0 +1,15 @@
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+load("//bazel/java:junit.bzl", "java_junit_test")
+
+java_junit_test(
+    name = "kafka_test",
+    srcs = glob(["*.java"]),
+    javacopts = JAVACOPTS,
+    test_classes = ["io.github.bpalermo.kafka.spiffe.kafka.PlaceholderTest"],
+    runtime_deps = ["@maven//:org_apache_kafka_kafka_clients"],
+    deps = [
+        "//bazel/maven:kafka_clients_provided",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+        "@maven//:org_junit_jupiter_junit_jupiter_api",
+    ],
+)

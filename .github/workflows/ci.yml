@@ -1,0 +1,117 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Third-party actions are pinned to commit SHAs, not tags; the version each SHA
+# corresponds to is in the comment beside it. Dependabot keeps them current.
+#
+# Caches: every job RESTORES the Bazel caches, but only runs on main SAVE them
+# (cache-save below), so only reviewed code populates a cache that a later
+# trusted build consumes. Gated on the ref rather than the event, because
+# workflow_dispatch can target any branch.
+jobs:
+  # Build, every test (including one per Kafka version of //matrix, which checks
+  # that the version's repository is the one on the class path), lint and
+  # formatting, on the default JDK 17.
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # No version is pinned here: bazelisk reads .bazelversion, so the
+      # checkout is the single source of the Bazel version.
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      # --config=ci refuses lockfile drift and fails on lint violations.
+      - name: bazel build //...
+        run: bazel build --config=ci //...
+
+      - name: bazel test //...
+        run: bazel test --config=ci //...
+
+      - name: Sources are formatted
+        run: bazel run --config=ci //:format.check
+
+  # The tests on each JDK the library supports. The bytecode is Java 17 on all of
+  # them; only the runtime changes (--config=jdk21, --config=jdk25 in .bazelrc).
+  # JDK 17 is the build job.
+  jdk:
+    name: jdk ${{ matrix.jdk }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ["21", "25"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-jdk${{ matrix.jdk }}
+          repository-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: bazel test //... on JDK ${{ matrix.jdk }}
+        run: bazel test --config=ci --config=jdk${{ matrix.jdk }} //...
+
+  # TODO(broker tests): the broker jobs of the design's CI matrix (section 9) go
+  # here, once there are tests for them. Each is a matrix over the Maven
+  # repositories of MODULE.bazel (kafka_3_0, kafka_3_3, kafka_3_9, kafka_4_0,
+  # kafka_4_4) running //matrix:<repo>_test-style targets built with
+  # kafka_version_test (//bazel/java:kafka.bzl):
+  #   - KRaft: 3.3, 3.9, 4.0, 4.4 (JDK 17; also 25 on 4.x)
+  #   - ZooKeeper (AclAuthorizer): 3.0, 3.9 (JDK 17)
+  #   - clients across versions, and the shaded jar.
+  # Add the job's name to `needs` of the `ci` job below.
+
+  # The single check the main ruleset requires, and the only reason this job
+  # exists.
+  #
+  # A required status check is matched by check-run name, so requiring the
+  # jobs themselves ties the ruleset to their names: rename or split one and
+  # the required check can never report again, which blocks every pull request
+  # instead of failing it. Requiring one aggregate leaves the jobs free to
+  # change.
+  #
+  # if: always() so it runs even when a job fails; a skipped job reports
+  # nothing, and a required check that never reports blocks the pull request.
+  ci:
+    name: ci
+    needs: [build, jdk]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # Reads the results rather than naming the jobs, so adding a job to
+      # `needs` above is enough to have it gate merges.
+      - name: every job this depends on must have succeeded
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "results: ${results}"
+          for result in ${results}; do
+            if [ "${result}" != "success" ]; then
+              echo "::error::a required job reported '${result}'" >&2
+              exit 1
+            fi
+          done
