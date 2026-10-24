@@ -5,9 +5,18 @@ java_junit_test(
     name = "x509_test",
     srcs = glob(["*.java"]),
     javacopts = JAVACOPTS,
-    test_classes = ["io.github.bpalermo.kafka.spiffe.x509.PlaceholderTest"],
+    test_classes = [
+        "io.github.bpalermo.kafka.spiffe.x509.BundleSetTest",
+        "io.github.bpalermo.kafka.spiffe.x509.SnapshotSslContextTest",
+        "io.github.bpalermo.kafka.spiffe.x509.SpiffeTrustManagerTest",
+        "io.github.bpalermo.kafka.spiffe.x509.SvidLeafTest",
+        "io.github.bpalermo.kafka.spiffe.x509.SvidValidatorTest",
+    ],
     deps = [
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
         "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
+        "//src/test/java/io/github/bpalermo/kafka/spiffe/testing",
+        "@maven//:org_bouncycastle_bcprov_jdk18on",
         "@maven//:org_junit_jupiter_junit_jupiter_api",
     ],
 )

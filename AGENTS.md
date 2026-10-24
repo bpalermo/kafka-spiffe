@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. The [README](README.md) h
 
 ## What this is
 
-kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. The build is bootstrapped (phase 1); the packages hold placeholders until their phases (`id` and `x509` first).
+kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 1 (the build) and 2 (`id`, `x509`) are done; `workload`, `kafka` and `metrics` hold placeholders until their phases.
 
 ## Commands
 
@@ -30,7 +30,7 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 | Path | Contents |
 | --- | --- |
 | `src/main/java/io/github/bpalermo/kafka/spiffe/{id,x509,workload,kafka,metrics}` | The library, one Bazel package per Java package (design section 3) |
-| `src/test/java/...` | Their tests, one `java_junit_test` per package |
+| `src/test/java/...` | Their tests, one `java_junit_test` per package; `testing` holds the shared test PKI and handshake helpers |
 | `matrix/` | One test per Kafka version, run against that version's jars; broker tests will live beside it |
 | `bazel/java` | `JAVACOPTS`, the JUnit macro (`junit.bzl`), the per-Kafka-version macro (`kafka.bzl`) |
 | `bazel/maven` | Maven lockfiles, and the provided (neverlink) and Netty epoll targets |
@@ -44,7 +44,8 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 - **Dependencies.** After editing `maven.install`, run the matching `REPIN=1 bazel run @<repo>//:pin`. `--config=ci` fails on lockfile drift. Test-only artifacts (JUnit, BouncyCastle, protobuf-java) are never dependencies of a library target.
 - **New test classes** run only once they are listed in the target's `test_classes` (`java_junit_test` selects classes explicitly; `--test_filter` has no effect).
 - **Lint.** First-party Java compiles with `-Xlint:all -Werror` (`JAVACOPTS`; every first-party target sets `javacopts = JAVACOPTS`) and Error Prone, so a warning is a build failure. PMD lints `java_library` and `java_binary` sources under `--config=lint` (ruleset `pmd.xml`; tests are not visited). Exclude a rule in `pmd.xml` with its reason; do not scatter suppressions.
-- **Placeholders.** Each package holds a `Placeholder` class and test so the build and lint have something to check. Delete it with the package's first real class.
+- **Placeholders.** A package not yet implemented holds a `Placeholder` class and test so the build and lint have something to check. Delete it with the package's first real class.
+- **Test certificates.** `//src/test/java/io/github/bpalermo/kafka/spiffe/testing` issues X.509-SVIDs with BouncyCastle (`TestPki`, malformed ones included, around a fixed `TestPki.NOW` that tests set their clocks to) and runs TLS handshakes in memory (`Handshake`). Tests use it rather than files or keytool.
 - **Design changes.** Update `docs/design.md` in the same change.
 
 ## Workflow
