@@ -440,8 +440,7 @@ public final class GrpcCall implements Closeable {
         responseHeadersSeen = true;
         httpStatus = code;
         String contentType = value(fields, "content-type");
-        grpcResponse =
-            httpStatus == 200 && contentType != null && contentType.startsWith("application/grpc");
+        grpcResponse = httpStatus == 200 && isGrpc(contentType);
         return endStream ? status(fields) : null;
       }
       if (!endStream) {
@@ -595,6 +594,22 @@ public final class GrpcCall implements Closeable {
             Http2.FRAME_SIZE_ERROR, type + " of " + payload.length + " octets");
       }
     }
+  }
+
+  /**
+   * Whether a content type is gRPC's: {@code application/grpc}, alone or followed by {@code +} (a
+   * format, such as {@code +proto}) or {@code ;} (parameters). {@code application/grpc-web} is
+   * another protocol.
+   */
+  static boolean isGrpc(String contentType) {
+    if (contentType == null) {
+      return false;
+    }
+    String type = contentType.trim().toLowerCase(java.util.Locale.ROOT);
+    String grpc = "application/grpc";
+    return type.equals(grpc)
+        || (type.startsWith(grpc)
+            && (type.charAt(grpc.length()) == '+' || type.charAt(grpc.length()) == ';'));
   }
 
   private static String value(List<Field> fields, String name) {

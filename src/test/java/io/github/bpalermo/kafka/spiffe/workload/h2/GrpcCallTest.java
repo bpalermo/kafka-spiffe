@@ -669,4 +669,29 @@ class GrpcCallTest {
     assertEquals(Code.CANCELLED, status.code());
     assertEquals(1, messages.size());
   }
+
+  @Test
+  void onlyGrpcContentTypesAreGrpc() {
+    for (String type :
+        new String[] {
+          "application/grpc",
+          "application/grpc+proto",
+          "application/grpc;charset=utf-8",
+          "Application/GRPC"
+        }) {
+      assertTrue(GrpcCall.isGrpc(type), type);
+    }
+    for (String type :
+        new String[] {"application/grpc-web", "application/grpcx", "text/plain", "", null}) {
+      org.junit.jupiter.api.Assertions.assertFalse(GrpcCall.isGrpc(type), String.valueOf(type));
+    }
+    Result web =
+        run(
+            new Server()
+                .settings()
+                .headers(0, ":status", "200", "content-type", "application/grpc-web")
+                .frame(Http2.DATA, Http2.FLAG_END_STREAM, 1, grpc(new byte[] {1})));
+    assertEquals(Code.UNKNOWN, web.status().code());
+    assertTrue(web.messages().isEmpty());
+  }
 }
