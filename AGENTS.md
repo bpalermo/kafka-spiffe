@@ -49,4 +49,4 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 
 ## Workflow
 
-- Changes go through a pull request, and the `ci` check must pass.
+- `main` is protected: changes go through a pull request, squash-merged once the `ci` check passes and every review thread is resolved. Release tags (`v*`) only repository admins can create; publishing runs in the `release` environment.
