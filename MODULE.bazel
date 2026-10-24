@@ -1,0 +1,134 @@
+"""kafka-spiffe: SPIFFE mutual TLS for Apache Kafka brokers and clients, 3.0 and later."""
+
+module(
+    name = "kafka_spiffe",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "rules_java", version = "9.9.0")
+bazel_dep(name = "rules_jvm_external", version = "7.1")
+
+# Formatting and linting.
+bazel_dep(name = "aspect_rules_lint", version = "2.9.1")
+bazel_dep(name = "buildifier_prebuilt", version = "10.1.0")
+
+# --- Maven -----------------------------------------------------------------------
+# The library is compiled ONCE, against the main `@maven` repository, whose
+# kafka-clients is 3.0.0: the oldest version the library supports, so nothing newer
+# is called by accident. kafka-clients and slf4j-api are provided by whoever runs
+# the library and are never shipped: //bazel/maven:kafka_clients_provided and
+# :slf4j_api_provided are neverlink targets over them.
+#
+# gRPC and Netty come from Maven (there are no protos to compile). Netty is pinned
+# to 4.2.16.Final, the version grpc-java 1.84.3 is built against. Unix domain sockets
+# for grpc-netty need Netty's epoll transport, and its native library is a per-arch
+# classifier jar; both architectures are listed, and the build picks one with a
+# select() on the target CPU (//bazel/maven:netty_epoll_native).
+#
+# The resolved tree, with checksums, is pinned in //bazel/maven:maven_install.json.
+# Re-pin after editing this list: `REPIN=1 bazel run @maven//:pin`.
+maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
+maven.install(
+    name = "maven",
+    artifacts = [
+        # Provided at compile time; the floor of the supported range.
+        "org.apache.kafka:kafka-clients:3.0.0",
+        # Provided; 1.7.x is the API Kafka 3.0 ships, and what is called here exists in 2.x too.
+        "org.slf4j:slf4j-api:1.7.36",
+        "io.grpc:grpc-api:1.84.3",
+        "io.grpc:grpc-core:1.84.3",
+        "io.grpc:grpc-stub:1.84.3",
+        "io.grpc:grpc-netty:1.84.3",
+        "io.netty:netty-transport-native-epoll:jar:linux-x86_64:4.2.16.Final",
+        "io.netty:netty-transport-native-epoll:jar:linux-aarch_64:4.2.16.Final",
+        "io.netty:netty-transport-native-unix-common:4.2.16.Final",
+        "io.netty:netty-transport:4.2.16.Final",
+        "io.netty:netty-transport-classes-epoll:4.2.16.Final",
+        "io.netty:netty-buffer:4.2.16.Final",
+        "io.netty:netty-handler:4.2.16.Final",
+        # Tests only: JUnit (Jupiter) on the JUnit Platform console launcher.
+        "org.junit.jupiter:junit-jupiter-api:6.1.3",
+        "org.junit.jupiter:junit-jupiter-engine:6.1.3",
+        "org.junit.platform:junit-platform-console:6.1.3",
+        # Tests only: certificates generated in the test, and the wire bytes the
+        # Workload API reader is checked against (protobuf's CodedOutputStream).
+        "org.bouncycastle:bcprov-jdk18on:1.86",
+        "org.bouncycastle:bcpkix-jdk18on:1.86",
+        "com.google.protobuf:protobuf-java:4.36.2",
+    ],
+    fail_if_repin_required = True,
+    known_contributing_modules = ["protobuf"],
+    lock_file = "//bazel/maven:maven_install.json",
+    repositories = ["https://repo.maven.apache.org/maven2/"],
+    strict_visibility = True,
+)
+
+# One repository per Kafka version the tests run against (design §9), so the tests
+# of one version never see another's jars. Each has its own lockfile. A repository
+# holds the version's kafka-clients now; the broker jars (kafka_2.13, the server
+# and metadata modules, the test cluster) are added to it when broker tests exist.
+# Re-pin one: `REPIN=1 bazel run @kafka_3_0//:pin`.
+#
+# Versions are the latest patch release of each line in the matrix.
+[
+    maven.install(
+        name = "kafka_" + line,
+        artifacts = ["org.apache.kafka:kafka-clients:" + version],
+        fail_if_repin_required = True,
+        lock_file = "//bazel/maven:kafka_%s_install.json" % line,
+        repositories = ["https://repo.maven.apache.org/maven2/"],
+        strict_visibility = True,
+    )
+    for line, version in {
+        "3_0": "3.0.2",
+        "3_3": "3.3.2",
+        "3_9": "3.9.2",
+        "4_0": "4.0.2",
+        "4_4": "4.4.0",
+    }.items()
+]
+
+use_repo(
+    maven,
+    "kafka_3_0",
+    "kafka_3_3",
+    "kafka_3_9",
+    "kafka_4_0",
+    "kafka_4_4",
+    "maven",
+)
+
+# --- Formatter and linter tools --------------------------------------------------
+# google-java-format: aspect_rules_lint bundles only 1.17.0, which predates
+# current Java syntax, so the jar is pinned here instead (//bazel/format wraps it
+# in a java_binary). Bump = new version + new sha256.
+http_jar = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_jar")
+
+http_jar(
+    name = "google_java_format",
+    sha256 = "834b2a0c38cb774953322a84b5ca3f2f40dd3156650b3cd44d3b744345962f7a",
+    url = "https://github.com/google/google-java-format/releases/download/v1.37.0/google-java-format-1.37.0-all-deps.jar",
+)
+
+# PMD: Java lint (rules_lint aspect, //bazel/lint). aspect_rules_lint bundles only
+# 7.7.0, which cannot parse Java 25, so the distribution is pinned here instead.
+# Bump = new version in the URL and prefix + new sha256.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "net_sourceforge_pmd",
+    build_file_content = """\
+load("@rules_java//java:defs.bzl", "java_import")
+
+java_import(
+    name = "net_sourceforge_pmd",
+    jars = glob(["*.jar"]),
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "f974ba571f7bc01c73fffe11bade25fbc1f438698f9e9c00e416e8d65e9fbac2",
+    strip_prefix = "pmd-bin-7.28.0/lib",
+    url = "https://github.com/pmd/pmd/releases/download/pmd_releases/7.28.0/pmd-dist-7.28.0-bin.zip",
+)

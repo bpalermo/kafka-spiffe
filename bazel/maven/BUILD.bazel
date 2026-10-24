@@ -1,0 +1,33 @@
+load("@rules_java//java:defs.bzl", "java_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+exports_files(glob(["*_install.json"]))
+
+# Compile-time only (neverlink): on the compile class path, never on a run time one
+# and never shipped. Whoever runs the library supplies Kafka and slf4j; a test chooses
+# which Kafka by naming that version's repository in runtime_deps (//bazel/java:kafka.bzl).
+java_library(
+    name = "kafka_clients_provided",
+    neverlink = True,
+    exports = ["@maven//:org_apache_kafka_kafka_clients"],
+)
+
+java_library(
+    name = "slf4j_api_provided",
+    neverlink = True,
+    exports = ["@maven//:org_slf4j_slf4j_api"],
+)
+
+# The transport of Unix domain sockets for grpc-netty: Netty's epoll classes and the
+# native library of the architecture being built for.
+java_library(
+    name = "netty_epoll_native",
+    exports = [
+        "@maven//:io_netty_netty_transport_classes_epoll",
+        "@maven//:io_netty_netty_transport_native_unix_common",
+    ] + select({
+        "@platforms//cpu:aarch64": ["@maven//:io_netty_netty_transport_native_epoll_linux_aarch_64"],
+        "//conditions:default": ["@maven//:io_netty_netty_transport_native_epoll_linux_x86_64"],
+    }),
+)

@@ -1,0 +1,22 @@
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+load("//bazel/java:junit.bzl", "java_junit_test")
+
+java_junit_test(
+    name = "workload_test",
+    srcs = glob(["*.java"]),
+    javacopts = JAVACOPTS,
+    test_classes = [
+        "io.github.bpalermo.kafka.spiffe.workload.PlaceholderTest",
+        "io.github.bpalermo.kafka.spiffe.workload.TransportTest",
+    ],
+    runtime_deps = [
+        "//bazel/maven:netty_epoll_native",
+        "@maven//:io_grpc_grpc_netty",
+    ],
+    deps = [
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
+        "@maven//:io_grpc_grpc_netty",
+        "@maven//:io_netty_netty_transport_classes_epoll",
+        "@maven//:org_junit_jupiter_junit_jupiter_api",
+    ],
+)

@@ -1,0 +1,16 @@
+load("//bazel/java:kafka.bzl", "KAFKA_VERSIONS", "kafka_version_test")
+
+# One target per Kafka version: //matrix:kafka_3_0_test ... //matrix:kafka_4_4_test.
+# Broker tests (KRaft and ZooKeeper, design section 9) are not written yet; when they
+# are, they use kafka_version_test the same way, with that version's broker jars in
+# its repository (MODULE.bazel). The e2e tag keeps tests that need a SPIRE server or
+# a container out of a plain `bazel test //...`.
+[
+    kafka_version_test(
+        srcs = ["KafkaVersionTest.java"],
+        repo = repo,
+        test_classes = ["io.github.bpalermo.kafka.spiffe.matrix.KafkaVersionTest"],
+        version = version,
+    )
+    for repo, version in KAFKA_VERSIONS.items()
+]

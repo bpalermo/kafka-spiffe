@@ -1,0 +1,9 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+
+java_library(
+    name = "x509",
+    srcs = glob(["*.java"]),
+    javacopts = JAVACOPTS,
+    visibility = ["//visibility:public"],
+)

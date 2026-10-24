@@ -1,0 +1,5 @@
+exports_files([
+    "defs.bzl",
+    "junit.bzl",
+    "kafka.bzl",
+])
