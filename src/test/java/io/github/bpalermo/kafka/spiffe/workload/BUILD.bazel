@@ -4,9 +4,14 @@ load("//bazel/java:junit.bzl", "java_junit_test")
 java_junit_test(
     name = "workload_test",
     size = "medium",
-    srcs = glob(["*.java"]),
+    srcs = glob(
+        ["*.java"],
+        exclude = ["SpireE2eTest.java"],
+    ),
     javacopts = JAVACOPTS,
+    resources = ["testdata/spire-x509-svid-response.bin"],
     test_classes = [
+        "io.github.bpalermo.kafka.spiffe.workload.SpireFixtureTest",
         "io.github.bpalermo.kafka.spiffe.workload.X509SourceRegistryTest",
         "io.github.bpalermo.kafka.spiffe.workload.X509SourceTest",
         "io.github.bpalermo.kafka.spiffe.workload.X509SvidResponseTest",
@@ -20,6 +25,29 @@ java_junit_test(
         "@maven//:com_google_protobuf_protobuf_java",
         "@maven//:io_grpc_grpc_api",
         "@maven//:io_netty_netty_transport_classes_epoll",
+        "@maven//:org_junit_jupiter_junit_jupiter_api",
+    ],
+)
+
+# The client against a real SPIRE agent in containers: needs Docker.
+java_junit_test(
+    name = "spire_e2e_test",
+    size = "large",
+    srcs = ["SpireE2eTest.java"],
+    javacopts = JAVACOPTS,
+    tags = [
+        "e2e",
+        "no-sandbox",
+        "requires-network",
+    ],
+    test_classes = ["io.github.bpalermo.kafka.spiffe.workload.SpireE2eTest"],
+    runtime_deps = ["@maven//:org_slf4j_slf4j_api"],
+    deps = [
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload/h2",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
+        "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:spire",
         "@maven//:org_junit_jupiter_junit_jupiter_api",
     ],
 )

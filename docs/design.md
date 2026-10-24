@@ -372,7 +372,7 @@ Each Kafka version is its own `maven.install` repository, so the tests of one ve
    - Found on the way: the principal builder is per connection and `build` per request; a broker makes a factory per network thread per listener and per inter-broker client.
 1. The repository: `MODULE.bazel` (one Maven repository per Kafka version), `.bazelrc` (Java 17, the JDK matrix), lint, the JUnit macro, CI, `AGENTS.md`.
 2. `id` and `x509`, with their tests. Done.
-3. `workload` and `workload.h2`: HTTP/2 and HPACK, the gRPC stream, the wire reader, `X509Source`, the registry, the fake Workload API (grpc-java, test-only), the Testcontainers SPIRE harness and the recorded real-SVID fixtures, backoff and expiry, JMX. The Netty and gRPC artifacts leave the library's dependencies (they stay, test-only, for the fake).
+3. `workload` and `workload.h2`: HTTP/2 and HPACK, the gRPC stream, the wire reader, `X509Source`, the registry, the fake Workload API (grpc-java, test-only), the Testcontainers SPIRE harness and the recorded real-SVID fixtures, backoff and expiry, JMX. The Netty and gRPC artifacts leave the library's dependencies (they stay, test-only, for the fake). Done.
 4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests.
 5. `SpiffePrincipalBuilder`: serde, mapping rules, per-listener policy, an authorizer test.
 6. The jar and its test, publishing, the operator's documentation (broker and client configuration, ACL migration).

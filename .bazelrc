@@ -41,6 +41,9 @@ test --incompatible_strict_action_env
 test --test_tag_filters=-e2e
 test:e2e --test_tag_filters=e2e
 test:e2e --nocache_test_results
+# Testcontainers finds Docker through these when they are set (HOME for its own and
+# Docker's configuration files); otherwise through /var/run/docker.sock.
+test:e2e --test_env=HOME --test_env=DOCKER_HOST --test_env=TESTCONTAINERS_RYUK_DISABLED
 
 # Reproducible dependency state: pin the resolved Maven trees and let CI refuse
 # any drift of the module lockfile instead of silently rewriting it.

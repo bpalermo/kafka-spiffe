@@ -61,6 +61,9 @@ maven.install(
         "org.bouncycastle:bcprov-jdk18on:1.86",
         "org.bouncycastle:bcpkix-jdk18on:1.86",
         "com.google.protobuf:protobuf-java:4.36.2",
+        # Tests only (e2e): SPIRE servers and agents in containers, started by the test.
+        "org.testcontainers:testcontainers:2.0.5",
+        "com.github.docker-java:docker-java-api:3.7.1",
     ],
     fail_if_repin_required = True,
     known_contributing_modules = ["protobuf"],
