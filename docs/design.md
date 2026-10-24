@@ -55,9 +55,9 @@ What A relies on, read from `kafka-clients` 4.3.1 and checked against 3.0.0 and 
 - The factory is never told which listener it is for: unknown keys such as `spiffe.*` reach it, but a listener-prefixed unknown key (`listener.name.x.spiffe.foo`) arrives still prefixed, and is dropped altogether on its own listener when the same key is also set without the prefix (phase 0, Q4). Handshake policy is therefore per process; the principal builder, which is told the listener, refines it per listener with keys that carry the listener name inside the `spiffe.` namespace (§4, §5).
 - A broker creates one factory per network thread per listener (`num.network.threads`) and one per inter-broker client (replica fetchers, the controller channel, transaction markers): ten on a 4.4 broker with two TLS listeners. They share one source through the registry.
 - The principal builder is created and configured **per connection** (`SslChannelBuilder`'s authenticator is), and `build` is called **for every request**, on the network thread. Its `configure` must be cheap and its principal is computed once per connection.
-- `spiffe.*` keys are static. `kafka-configs --alter` accepts them (stored as sensitive, values hidden), but they never reach the factory, not even after a restart: a listener is reconfigured only when one of `SslConfigs.RECONFIGURABLE_CONFIGS` changes, whatever the factory's `reconfigurableConfigs()` says (phase 0, Q3).
+- **`spiffe.*` keys are static, by the library's own policy**, not because Kafka withholds them. `kafka-configs --alter` accepts them (stored as sensitive, values hidden), and Kafka can still hand one to the library: when a standard SSL key of a listener changes, the new configuration it passes to `SslFactory.reconfigure` includes every non-Kafka key, and `SslFactory` copies into the next factory's configuration those its `reconfigurableConfigs()` lists (`DynamicBrokerConfig.processReconfigurable`, `SslFactory.createNewSslEngineFactory` at 4.4.0); and a 3.x ZooKeeper broker loads its stored dynamic configuration before it creates its listeners (`KafkaServer.scala:268` before `:383` at 3.9.1, `KafkaConfig.originals` delegating to the current configuration), so a stored value reaches `configure()` at the next restart. The policy: `reconfigurableConfigs()` lists no `spiffe.*` key, so a rebuilt factory keeps its predecessor's `spiffe.*` values; and the operator documentation says never to set `spiffe.*` dynamically, since on a ZooKeeper broker a stored value takes effect at the next restart and `configure()` cannot tell it from a static one (phase 0, Q3).
 - The factory and the principal builder are created with `Utils.newInstance`, not as `Plugin<>`, so KIP-877 plugin metrics do not reach them. Metrics are JMX MBeans of their own (§7).
-- `KafkaPrincipalBuilder` extends `KafkaPrincipalSerde` from 4.0 on. In 3.x it does not, and the channel builders hand the serde on only `if (principalBuilder instanceof KafkaPrincipalSerde)`, so the builder declares both interfaces (§5). Phase 0 ran it: on a 3.3 or 3.9 KRaft cluster a builder without the serde fails every forwarded request (`Cannot deserialize principal from request context`).
+- `KafkaPrincipalBuilder` extends `KafkaPrincipalSerde` from 4.2 on. Up to 4.1 it does not, and the channel builders hand the serde on only `if (principalBuilder instanceof KafkaPrincipalSerde)`, so the builder declares both interfaces (§5). Phase 0 ran it: on a 3.3 or 3.9 KRaft cluster a builder without the serde fails every forwarded request (`Cannot deserialize principal from request context`).
 - An exception from `createServerSslEngine` or `createClientSslEngine` fails only that connection: the broker's processor closes it and goes on, the client's `NetworkClient` retries on its backoff (phase 0, Q2). An exception from `build` closes the connection after the handshake, with no error the client can see (Q1).
 - `kafka-clients` (Java 8 bytecode in 3.x, 11 in 4.x) shades its own protobuf, so it brings nothing this library's dependencies clash with.
 
@@ -67,7 +67,7 @@ The floor is Kafka 3.0, for brokers and clients, because Kafka 3.x is still wide
 
 | | 3.x | 4.x |
 |---|---|---|
-| Principal serde | Used only when the builder is an `instanceof KafkaPrincipalSerde` | Part of `KafkaPrincipalBuilder` |
+| Principal serde | Used only when the builder is an `instanceof KafkaPrincipalSerde` | The same in 4.0 and 4.1; part of `KafkaPrincipalBuilder` from 4.2 |
 | Authorizer | `AclAuthorizer` on ZooKeeper clusters, `StandardAuthorizer` on KRaft | `StandardAuthorizer` |
 | Requests forwarded to a controller | KRaft clusters only | Always |
 | JDKs (Kafka's documentation) | Clients 8 and later, brokers 11 and later (8 deprecated) | Clients 11 and later, brokers 17 and later |
@@ -81,7 +81,7 @@ The library is compiled against `kafka-clients` 3.0.0, so a call into an API add
 - `createServerSslEngine` and `createClientSslEngine` take the current context. New handshakes use the newest SVID and bundles; open connections keep the session they negotiated and are not touched.
 - One `SSLContext` per snapshot: no handshake mixes the key of one snapshot with the trust of another.
 - **Sessions are not resumed.** A session timeout counts from each session's creation, so no timeout can keep a session made late in an SVID's life from being resumed after that SVID, or the peer's, has expired, and a resumption checks neither certificate; a TLS 1.3 server's stateless tickets are in no cache that could be swept. Both session contexts therefore time sessions out after one second, the shortest the JDK allows (zero means no limit). Kafka's connections are long-lived, so a full handshake on reconnecting costs little.
-- `shouldBeRebuilt` is true only when a `spiffe.*` key, `ssl.enabled.protocols`, `ssl.cipher.suites` or `ssl.client.auth` changed. A rebuilt factory takes the same shared source, so a rebuild is cheap. Kafka calls it on every dynamic broker update, whatever changed, with the static configuration; since `spiffe.*` keys are static it is false for them in practice.
+- `shouldBeRebuilt` is true only when `ssl.enabled.protocols`, `ssl.cipher.suites` or `ssl.client.auth` changed, the keys `reconfigurableConfigs()` lists. A rebuilt factory takes the same shared source and its predecessor's `spiffe.*` values, so a rebuild is cheap. Kafka calls it on every dynamic broker update, whatever changed.
 
 ## 3. Components
 
@@ -107,7 +107,7 @@ The transport is grpc-java on Netty, with the native epoll transport for Unix do
 
 ## 4. Configuration
 
-Every key starts with `spiffe.`. They are read from the map Kafka passes to `configure()`, validated by a `ConfigDef`, and an unknown `spiffe.*` key is an error, so a typo does not go unnoticed. A `listener.name.<listener>.spiffe.*` key is an error too: Kafka drops it when the same key is set without the prefix, so it could not mean what it says. The keys are static: set through `kafka-configs --alter` they are stored but never applied (§2).
+Every key starts with `spiffe.`. They are read from the map Kafka passes to `configure()`, validated by a `ConfigDef`, and an unknown `spiffe.*` key is an error, so a typo does not go unnoticed. A `listener.name.<listener>.spiffe.*` key that reaches `configure()` is an error too. That catches it only when Kafka passes it on: when the same key is also set without the prefix, Kafka may drop the prefixed one before the library sees it (`ChannelBuilders.channelBuilderConfigs`), and nothing the library is given shows it was there. The operator documentation therefore says plainly that the form does not exist, and per-listener keys have a spelling of their own (`spiffe.principal.listener.<listener>.*`) that no filter touches. The keys are static (§2): set them in the properties file, never through `kafka-configs --alter`.
 
 ### Source
 
@@ -207,7 +207,7 @@ Every engine has `setEndpointIdentificationAlgorithm(null)`. There is no fallbac
 
 Kafka makes a builder per connection and calls `build` for every request, on the network thread. `configure` therefore parses nothing it has parsed before (the parsed policy is shared, keyed by the configuration map), never touches the Workload API source, and `build` computes the principal on its first call and returns the same one after.
 
-A broker forwards requests to the controller with the principal serialized, so the builder is also a `KafkaPrincipalSerde`. It declares both interfaces, `implements KafkaPrincipalBuilder, KafkaPrincipalSerde`: in 4.x the first already extends the second, and in 3.x a builder that does not declare it gets no serde and its forwarded requests fail. `serialize` and `deserialize` delegate to Kafka's `DefaultKafkaPrincipalBuilder`, and the builder returns plain `KafkaPrincipal`s, never a subclass, so the authorizer sees the same principal whether a request was forwarded or not.
+A broker forwards requests to the controller with the principal serialized, so the builder is also a `KafkaPrincipalSerde`. It declares both interfaces, `implements KafkaPrincipalBuilder, KafkaPrincipalSerde`: from 4.2 the first already extends the second, and up to 4.1 a builder that does not declare it gets no serde and its forwarded requests fail. `serialize` and `deserialize` delegate to Kafka's `DefaultKafkaPrincipalBuilder`, and the builder returns plain `KafkaPrincipal`s, never a subclass, so the authorizer sees the same principal whether a request was forwarded or not.
 
 ### The principal type
 
@@ -349,7 +349,7 @@ Each Kafka version is its own `maven.install` repository, so the tests of one ve
 0. **Spike**. Done; evidence in [docs/spike/phase-0.md](spike/phase-0.md):
    - `KafkaPrincipalBuilder.build` throwing: not an authentication failure. It runs per request, so the first request after the handshake closes the connection, with no error for the client and two ERROR stack traces on the broker. `reject` is dropped.
    - `createClientSslEngine` / `createServerSslEngine` throwing: only that connection fails, on both sides, from 3.0 to 4.4. `spiffe.svid.expired=fail` is offered; `present` stays the default.
-   - `kafka-configs --alter` with `listener.name.X.spiffe.*`: accepted and stored as sensitive, never applied, not even after a restart. `spiffe.*` keys are static.
+   - `kafka-configs --alter` with `listener.name.X.spiffe.*`: accepted and stored as sensitive. Not applied while the broker runs unless the factory lists the key as reconfigurable, and loaded at the next restart on a ZooKeeper broker. `spiffe.*` keys are static by the library's policy.
    - `listener.name.X.principal.builder.class`: honoured. But a listener-prefixed unknown key is dropped when the same key is also set without the prefix, so per-listener principal keys are `spiffe.principal.listener.<listener>.*`.
    - A `Spiffe` principal end to end: ACLs from `kafka-acls.sh`, `super.users` and a request forwarded to the controller all work, on ZooKeeper (3.0, 3.9) and KRaft (3.3, 3.9, 4.0, 4.4); on 3.x KRaft a builder without `KafkaPrincipalSerde` fails forwarded requests.
    - grpc-netty's epoll transport relocated: loads, beside 3.x `libs/` and on Alpine. No HTTP/2 fallback is needed; the relocation list grows (§9).
