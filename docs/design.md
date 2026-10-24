@@ -4,7 +4,7 @@ Status: approved. Nothing is implemented yet; the open questions in §10 are ans
 
 ## 1. Scope
 
-kafka-spiffe is a Java library that gives Apache Kafka 4.x brokers and clients mutual TLS based on [SPIFFE](https://spiffe.io/), without files:
+kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, mutual TLS based on [SPIFFE](https://spiffe.io/), without files:
 
 - **It talks to the SPIFFE Workload API directly**, over its Unix domain socket, and keeps the workload's X.509-SVID, its private key and the trust bundles (federated ones included) in memory. The Workload API streams rotations, and they take effect without restarting the broker or the client, and without closing the connections that are open.
 - **It verifies peers by SPIFFE ID**, never by host name: a client says which broker identities it accepts, a broker which client identities and trust domains.
@@ -46,7 +46,7 @@ Three ways to get rotating SPIFFE material into Kafka's TLS were weighed:
 
 **A** is the main path. **B** may ship later as an optional extra over the same core, for places where `ssl.engine.factory.class` cannot be set; its policy would come from a properties file named by a system property.
 
-What A relies on, read from `kafka-clients` 4.3.1:
+What A relies on, read from `kafka-clients` 4.3.1 and checked against 3.0.0 and 3.9.1, where all of it is the same unless said otherwise:
 
 - `SslEngineFactory` (extends `Configurable`, `Closeable`): `createClientSslEngine(peerHost, peerPort, endpointIdentification)`, `createServerSslEngine(peerHost, peerPort)`, `shouldBeRebuilt(Map)`, `reconfigurableConfigs()`, `keystore()`, `truststore()`.
 - Kafka creates one `SSLEngine` per connection, so a factory that hands out engines from the newest `SSLContext` rotates on every new handshake with no rebuild.
@@ -54,7 +54,21 @@ What A relies on, read from `kafka-clients` 4.3.1:
 - On the inter-broker listener `SslFactory.configure()` validates the factory by a handshake with itself, with an empty peer host. So a broker's client side must accept its own server SVID, and the broker's own ID or trust domain must be allowed (§4).
 - The factory is never told which listener it is for: unknown keys such as `spiffe.*` reach it, but a listener-prefixed unknown key (`listener.name.x.spiffe.foo`) arrives still prefixed. Handshake policy is therefore per process; the principal builder, which is told the listener, refines it per listener (§5).
 - The factory and the principal builder are created with `Utils.newInstance`, not as `Plugin<>`, so KIP-877 plugin metrics do not reach them. Metrics are JMX MBeans of their own (§7).
-- `kafka-clients` is Java 11 bytecode and shades its own protobuf, so it brings nothing this library's dependencies clash with.
+- `KafkaPrincipalBuilder` extends `KafkaPrincipalSerde` from 4.0 on. In 3.x it does not, and the channel builders hand the serde on only `if (principalBuilder instanceof KafkaPrincipalSerde)`, so the builder declares both interfaces (§5).
+- `kafka-clients` (Java 8 bytecode in 3.x, 11 in 4.x) shades its own protobuf, so it brings nothing this library's dependencies clash with.
+
+### Kafka versions
+
+The floor is Kafka 3.0, for brokers and clients, because Kafka 3.x is still widely run. Everything the library uses has the same shape from 3.0 to 4.3: `ssl.engine.factory.class` (since 2.6), `SslEngineFactory` with the same six methods, `SslFactory` skipping its keystore checks and validating handshake when `keystore()` and `truststore()` are null, `KafkaPrincipalSerde` (since 2.8), and the three authentication contexts. The differences that matter:
+
+| | 3.x | 4.x |
+|---|---|---|
+| Principal serde | Used only when the builder is an `instanceof KafkaPrincipalSerde` | Part of `KafkaPrincipalBuilder` |
+| Authorizer | `AclAuthorizer` on ZooKeeper clusters, `StandardAuthorizer` on KRaft | `StandardAuthorizer` |
+| Requests forwarded to a controller | KRaft clusters only | Always |
+| JDKs | Clients 8 and later, brokers 11 and later (8 deprecated) | Clients 11 and later, brokers 17 and later |
+
+The library is compiled against `kafka-clients` 3.0.0, so a call into an API added later fails to compile, and tested against 3.x and 4.x (§9). Java 17 bytecode means a 3.x client or broker is served only on Java 17 or later.
 
 ### Rotation
 
@@ -180,20 +194,20 @@ Every engine has `setEndpointIdentificationAlgorithm(null)`. There is no fallbac
 - **Plaintext** (`PlaintextAuthenticationContext`): `KafkaPrincipal.ANONYMOUS`, as Kafka's default builder does, for a plaintext controller listener.
 - **SASL** (`SaslAuthenticationContext`): delegated to Kafka's default builder, since `principal.builder.class` applies to every listener.
 
-`KafkaPrincipalBuilder` extends `KafkaPrincipalSerde`: a broker forwards requests to the controller with the principal serialized. `serialize` and `deserialize` delegate to Kafka's `DefaultKafkaPrincipalBuilder`, and the builder returns plain `KafkaPrincipal`s, never a subclass, so the authorizer sees the same principal whether a request was forwarded or not.
+A broker forwards requests to the controller with the principal serialized, so the builder is also a `KafkaPrincipalSerde`. It declares both interfaces, `implements KafkaPrincipalBuilder, KafkaPrincipalSerde`: in 4.x the first already extends the second, and in 3.x a builder that does not declare it gets no serde and its forwarded requests fail. `serialize` and `deserialize` delegate to Kafka's `DefaultKafkaPrincipalBuilder`, and the builder returns plain `KafkaPrincipal`s, never a subclass, so the authorizer sees the same principal whether a request was forwarded or not.
 
 ### The principal type
 
 A Kafka principal is a type and a name, and Kafka's own authorization does not require the type to be `User`. The default is a type of its own, `Spiffe`, because under `User` a SPIFFE ID shares a namespace with every SASL user: a SCRAM or PLAIN user named `spiffe://k8s.example.org/ns/foo/sa/bar`, on another listener of the same broker, would match every ACL written for that workload. Under `Spiffe` only a verified X.509-SVID produces those principals, and the type says, in ACL listings, `super.users` and the authorizer's log, where an identity came from. The name is the full SPIFFE ID under either type, so it is a valid SPIFFE ID copied from a registration entry, and changing the type does not change the name.
 
-What Kafka 4.3.1 does with a type other than `User`, read in its source:
+What Kafka does with a type other than `User`, read in the source of 4.3.1, 3.9.1 and 3.0.0, which agree:
 
 | Where | Behaviour |
 |---|---|
 | ACLs: `kafka-acls.sh`, the Admin API, the controller | The principal string is split at its first `:` (`SecurityUtils.parseKafkaPrincipal`; `AclControlManager` checks only that there is a colon). Any type is accepted. |
-| `StandardAuthorizer` | An ACL matches when its principal equals the session's (type and name), or is `User:*`. `User:*` therefore matches principals of every type, `Spiffe` included. |
-| `super.users` | Parsed the same way, and compared with the session principal's `toString()`, so `Spiffe:spiffe://…` works. |
-| Forwarding to the controller | `DefaultKafkaPrincipalBuilder.serialize` writes the type and the name, so a forwarded request keeps its type. |
+| `StandardAuthorizer`, and `AclAuthorizer` on 3.x ZooKeeper clusters | An ACL matches when its principal equals the session's (type and name), or is `User:*`. `User:*` therefore matches principals of every type, `Spiffe` included. |
+| `super.users` | Parsed the same way, and compared with the session principal (as a string by `StandardAuthorizer`, as a `KafkaPrincipal` by `AclAuthorizer`), so `Spiffe:spiffe://…` works. |
+| Forwarding to the controller | `DefaultKafkaPrincipalBuilder.serialize` writes the type and the name, so a forwarded request keeps its type. ZooKeeper clusters forward nothing. |
 | Client quotas | Keyed by the principal's name only, the type dropped: a quota for user `spiffe://…` applies under either type, and is shared with a SASL user of the same name. |
 | Delegation tokens | A token's owner can be of any type; its renewers must be `User` (`INVALID_PRINCIPAL_TYPE`). A workload with an SVID has no use for a token. |
 
@@ -271,22 +285,39 @@ Logs go through slf4j, which Kafka provides: SPIFFE IDs, trust domains, expiry t
 
 A Bazel (bzlmod) repository: hermetic JDKs, `-Xlint:all -Werror`, Error Prone, PMD, google-java-format, JUnit on the console launcher, pinned Maven dependencies through rules_jvm_external. gRPC and Netty come from Maven; there are no protos to compile.
 
-**Bytecode: Java 17** (`--java_language_version=17`, compiled against the JDK 17 runtime so later APIs fail to compile). Java 17 is the oldest LTS a Kafka 4 broker runs on. Kafka 4 clients still run on 11, but Java 11 clients are not served. Tests run on every LTS from 17 to the latest, today 17, 21 and 25.
+**Bytecode: Java 17** (`--java_language_version=17`, compiled against the JDK 17 runtime so later APIs fail to compile). Java 17 is the oldest LTS a Kafka 4 broker runs on. Clients on Java 8 or 11, which Kafka 3.x and 4.x clients still allow, are not served, nor 3.x brokers on Java 11.
+
+**`kafka-clients` 3.0.0** at compile time (provided, never shipped), so nothing newer is called by accident.
 
 ### Tests
 
 - **Unit**: the SPIFFE ID parser against the specification's cases and `java-spiffe`'s; matchers; the wire reader against bytes written by protobuf's `CodedOutputStream` (a test-only dependency) and recorded SPIRE responses; `SvidValidator` and `SpiffeTrustManager` with certificates generated in the test (BouncyCastle, test-only: CA leaves, several URI SANs, wrong key usage, expired chains), at a set clock; mapping rules; the serde against `DefaultKafkaPrincipalBuilder`.
 - **A fake Workload API**: a gRPC server on a Unix socket that checks the security header and pushes publications, and can be told to fail (`PERMISSION_DENIED`, `UNAVAILABLE`, a closed stream), to delay, to serve several SVIDs with hints, and to change federated bundles.
-- **Engine pairs**, no broker: a client and a server `SSLEngine` from two factories, each on its own fake Workload API, handshaking in memory. Allowed and refused by ID, trust domain and pattern; an `k8s.example.org` client against a `example.org` broker, and a forged cross-trust-domain chain refused; a rotation, after which the next handshake presents the new SVID while the old session goes on, with no rebuild; bundle rotation; a federated bundle withdrawn; expiry; the validation handshake with an empty peer host.
-- **Kafka**: an in-process KRaft broker, with broker and client on fake Workload APIs and `StandardAuthorizer` ACLs on `Spiffe:spiffe://…` (and one on `User:`, for the setting); producing and consuming across client and broker rotations (SVIDs of seconds) with no new connections (`connection-creation-total`); the inter-broker listener on TLS; a request forwarded to the controller, for the serde.
-- **End to end** (tagged `e2e`): two real SPIRE servers, federated, with agents; an `apache/kafka:4.x` broker with only the shaded jar added; a client container; 60-second SVIDs, so the run sees several rotations.
+- **Engine pairs**, no broker: a client and a server `SSLEngine` from two factories, each on its own fake Workload API, handshaking in memory. Allowed and refused by ID, trust domain and pattern; a `k8s.example.org` client against an `example.org` broker, and a forged cross-trust-domain chain refused; a rotation, after which the next handshake presents the new SVID while the old session goes on, with no rebuild; bundle rotation; a federated bundle withdrawn; expiry; the validation handshake with an empty peer host.
+- **Kafka**: an in-process broker, with broker and client on fake Workload APIs and ACLs on `Spiffe:spiffe://…` (and one on `User:`, for the setting); producing and consuming across client and broker rotations (SVIDs of seconds) with no new connections (`connection-creation-total`); the inter-broker listener on TLS; on KRaft, a request forwarded to the controller, for the serde; on ZooKeeper, `AclAuthorizer`. The same tests run on each Kafka version of the matrix below, and a client of one version against a broker of another (a 3.x client and a 4.x broker, and the reverse).
+- **End to end** (tagged `e2e`): two real SPIRE servers, federated, with agents; an `apache/kafka` broker (the newest 3.x and 4.x images) with only the shaded jar added; a client container; 60-second SVIDs, so the run sees several rotations.
 - **The shaded jar**: a handshake with only `kafka-spiffe-all` and `kafka-clients` on the class path; no unrelocated `io/netty`, `io/grpc` or `com/google` classes; the relocated epoll library loads.
+
+### CI matrix
+
+Each JDK runs only where the Kafka version supports it, so the matrix is not a full product:
+
+| Job | JDK | Kafka |
+|---|---|---|
+| Unit and engine pairs | 17, 21, 25 | (none) |
+| Broker tests, KRaft | 17 and 25 on 4.x; 17 on 3.x | 3.3, the first with production KRaft; 3.9; 4.0; the newest 4.x |
+| Broker tests, ZooKeeper (`AclAuthorizer`) | 17 | 3.0, 3.9 |
+| Clients across versions | 17 | a 3.0 client and a newest 4.x broker; a newest 4.x client and a 3.9 broker |
+| End to end | the image's | newest 3.x and 4.x images |
+| The shaded jar | 17 | 3.0, the newest 4.x |
+
+Each Kafka version is its own `maven.install` repository, so the tests of one version never see another's jars; the library is built once, against 3.0.0. Which 3.x versions run on JDK 21 and 25 is phase 0's to find out; 17 is supported by all of them.
 
 ### Packaging
 
-- `io.github.bpalermo:kafka-spiffe`: the library, with gRPC and Netty as ordinary dependencies, and `kafka-clients` (4.0 or later) and `slf4j-api` provided. For applications that manage gRPC and Netty themselves.
+- `io.github.bpalermo:kafka-spiffe`: the library, with gRPC and Netty as ordinary dependencies, and `kafka-clients` (3.0 or later) and `slf4j-api` provided. For applications that manage gRPC and Netty themselves.
 - `io.github.bpalermo:kafka-spiffe-all`: shaded, for a broker's class path. `io.grpc`, `io.netty`, `com.google.common`, `com.google.thirdparty`, `io.perfmark` and `com.google.errorprone.annotations` are relocated under `io.github.bpalermo.kafka.spiffe.shaded`; `org.apache.kafka` and `org.slf4j` are not. The epoll native libraries are renamed to the relocated prefix Netty looks for, and gRPC's service files relocated (or the channel built without ServiceLoader).
-- Published to Maven Central, and the shaded jar as a release asset, signed with cosign. `Automatic-Module-Name` in the manifest. Semantic versioning; Kafka 4.0 is the floor.
+- Published to Maven Central, and the shaded jar as a release asset, signed with cosign. `Automatic-Module-Name` in the manifest. Semantic versioning; Kafka 3.0 is the floor, and raising it is a major version.
 
 ## 10. Plan
 
@@ -297,9 +328,10 @@ A Bazel (bzlmod) repository: hermetic JDKs, `-Xlint:all -Werror`, Error Prone, P
    - whether `listener.name.X.principal.builder.class` is honoured;
    - a `Spiffe` principal end to end: an ACL added with `kafka-acls.sh`, a super user, and a request forwarded to the controller (the source says all three work; this runs them);
    - grpc-netty's epoll transport relocated and loading in the shaded jar (if not, our own HTTP/2 client over the JDK's Unix sockets);
-   - which in-process Kafka 4 test cluster is published and usable;
-   - what a Kafka 4.3 distribution's `libs/` holds (Netty, Guava).
-1. The repository: `MODULE.bazel`, `.bazelrc` (Java 17, the JDK matrix), lint, the JUnit macro, CI, `AGENTS.md`.
+   - which in-process test clusters are published and usable: KRaft for 3.3 to 4.x, ZooKeeper for 3.x;
+   - which JDKs each 3.x version runs on (17 for all; 21 and 25 for some), and whether the `apache/kafka` images, published from 3.7, are enough for the end-to-end 3.x run;
+   - what a Kafka 3.x and 4.x distribution's `libs/` holds (Netty, Guava).
+1. The repository: `MODULE.bazel` (one Maven repository per Kafka version), `.bazelrc` (Java 17, the JDK matrix), lint, the JUnit macro, CI, `AGENTS.md`.
 2. `id` and `x509`, with their tests.
 3. `workload`: the reader, the client, `X509Source`, the registry, the fake Workload API, backoff and expiry, JMX.
 4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests.
@@ -310,7 +342,8 @@ A Bazel (bzlmod) repository: hermetic JDKs, `-Xlint:all -Werror`, Error Prone, P
 
 ### Decided
 
-- **Java 17 bytecode**, tested on every LTS up to the latest. Java 11 clients are not served.
+- **Java 17 bytecode**, tested on every LTS up to the latest. Java 8 and 11 clients are not served.
+- **Kafka 3.0 and later**, brokers and clients, ZooKeeper and KRaft, tested on each (§9).
 - **The shaded jar's size** (about 10 MB) is acceptable, so the transport is grpc-java on Netty.
 - **The principal** is the full SPIFFE ID, of type `Spiffe` (§5). Grouping workloads is done with mapping rules.
 - **A peer that gets no principal** gets `Spiffe:spiffe-unauthorized` by default: an authorization error is clearer to its owner than a closed connection (§5).
