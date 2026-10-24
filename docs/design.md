@@ -8,7 +8,7 @@ kafka-spiffe is a Java library that gives Apache Kafka 4.x brokers and clients m
 
 - **It talks to the SPIFFE Workload API directly**, over its Unix domain socket, and keeps the workload's X.509-SVID, its private key and the trust bundles (federated ones included) in memory. The Workload API streams rotations, and they take effect without restarting the broker or the client, and without closing the connections that are open.
 - **It verifies peers by SPIFFE ID**, never by host name: a client says which broker identities it accepts, a broker which client identities and trust domains.
-- **It makes the peer's SPIFFE ID the Kafka principal**, so ACLs (`StandardAuthorizer`) are written against `User:spiffe://trust-domain/path`.
+- **It makes the peer's SPIFFE ID the Kafka principal**, so ACLs (`StandardAuthorizer`) are written against `Spiffe:spiffe://trust-domain/path`.
 
 Out of scope: JWT-SVIDs, SASL, authorization itself (Kafka's authorizer does it, on the principal this library produces), and SPIRE's deployment.
 
@@ -119,10 +119,10 @@ At least one of the three is required, on clients and on brokers: there is no im
 
 | Key | Meaning | Default |
 |---|---|---|
-| `spiffe.principal.type` | The principal type | `User` |
+| `spiffe.principal.type` | The principal type: `Spiffe`, or `User` for authorizers and tools that know no other (§5) | `Spiffe` |
 | `spiffe.principal.mapping.rules` | `RULE:<regex>/<replacement>/[L\|U], ..., DEFAULT`, the syntax of `ssl.principal.mapping.rules`, applied to the full SPIFFE ID. A string, not a Kafka list: regular expressions contain commas | `DEFAULT` (the ID itself) |
 | `spiffe.principal.allowed.ids`, `.trust.domains`, `.id.patterns` | Which peers get a principal, also as `listener.name.<listener>.spiffe.principal.*` | the peer allow-list |
-| `spiffe.principal.unmatched` | `reject` (the connection is refused) or `deny-principal` (`User:spiffe-unauthorized`, which no ACL names) | to be decided (§10) |
+| `spiffe.principal.unmatched` | `reject` (the connection is refused) or `deny-principal` (`<type>:spiffe-unauthorized`, which no ACL names) | to be decided (§10) |
 
 ### Metrics
 
@@ -143,7 +143,7 @@ spiffe.endpoint.socket=unix:///run/spire/agent/sockets/agent.sock
 spiffe.peer.allowed.trust.domains=nas.palermo.dev,aether.internal
 authorizer.class.name=org.apache.kafka.metadata.authorizer.StandardAuthorizer
 allow.everyone.if.no.acl.found=false
-super.users=User:spiffe://nas.palermo.dev/kafka/broker;User:ANONYMOUS
+super.users=Spiffe:spiffe://nas.palermo.dev/kafka/broker;User:ANONYMOUS
 ```
 
 `User:ANONYMOUS` is a super user only because the controller listener is plaintext and bound to the loopback interface; with SPIFFE on that listener too it goes. The listener is named `MTLS` rather than `SSL` because the `apache/kafka` image's start script asks for JKS files for a listener named `SSL`. The jar goes on the broker's class path through `CLASSPATH`, which `kafka-run-class.sh` honours, or in `libs/`.
@@ -175,18 +175,35 @@ Every engine has `setEndpointIdentificationAlgorithm(null)`. There is no fallbac
 
 `SpiffePrincipalBuilder.build(context)`:
 
-- **TLS** (`SslAuthenticationContext`): reads the leaf from `session.getPeerCertificates()`, parses its SPIFFE ID again, strictly (nothing is carried over from the handshake), applies the per-listener allow-list and the mapping rules, and returns `new KafkaPrincipal(type, name)`, by default `User:spiffe://aether.internal/ns/foo/sa/bar`. It never looks at the subject DN or CN, and never returns `ANONYMOUS`. A client that sent no certificate is treated as unmatched.
+- **TLS** (`SslAuthenticationContext`): reads the leaf from `session.getPeerCertificates()`, parses its SPIFFE ID again, strictly (nothing is carried over from the handshake), applies the per-listener allow-list and the mapping rules, and returns `new KafkaPrincipal(type, name)`, by default `Spiffe:spiffe://aether.internal/ns/foo/sa/bar`. It never looks at the subject DN or CN, and never returns `ANONYMOUS`. A client that sent no certificate is treated as unmatched.
 - **Plaintext** (`PlaintextAuthenticationContext`): `KafkaPrincipal.ANONYMOUS`, as Kafka's default builder does, for a plaintext controller listener.
 - **SASL** (`SaslAuthenticationContext`): delegated to Kafka's default builder, since `principal.builder.class` applies to every listener.
 
 `KafkaPrincipalBuilder` extends `KafkaPrincipalSerde`: a broker forwards requests to the controller with the principal serialized. `serialize` and `deserialize` delegate to Kafka's `DefaultKafkaPrincipalBuilder`, and the builder returns plain `KafkaPrincipal`s, never a subclass, so the authorizer sees the same principal whether a request was forwarded or not.
 
+### The principal type
+
+A Kafka principal is a type and a name, and Kafka's own authorization does not require the type to be `User`. The default is a type of its own, `Spiffe`, because under `User` a SPIFFE ID shares a namespace with every SASL user: a SCRAM or PLAIN user named `spiffe://aether.internal/ns/foo/sa/bar`, on another listener of the same broker, would match every ACL written for that workload. Under `Spiffe` only a verified X.509-SVID produces those principals, and the type says, in ACL listings, `super.users` and the authorizer's log, where an identity came from. The name is the full SPIFFE ID under either type, so it is a valid SPIFFE ID copied from a registration entry, and changing the type does not change the name.
+
+What Kafka 4.3.1 does with a type other than `User`, read in its source:
+
+| Where | Behaviour |
+|---|---|
+| ACLs: `kafka-acls.sh`, the Admin API, the controller | The principal string is split at its first `:` (`SecurityUtils.parseKafkaPrincipal`; `AclControlManager` checks only that there is a colon). Any type is accepted. |
+| `StandardAuthorizer` | An ACL matches when its principal equals the session's (type and name), or is `User:*`. `User:*` therefore matches principals of every type, `Spiffe` included. |
+| `super.users` | Parsed the same way, and compared with the session principal's `toString()`, so `Spiffe:spiffe://…` works. |
+| Forwarding to the controller | `DefaultKafkaPrincipalBuilder.serialize` writes the type and the name, so a forwarded request keeps its type. |
+| Client quotas | Keyed by the principal's name only, the type dropped: a quota for user `spiffe://…` applies under either type, and is shared with a SASL user of the same name. |
+| Delegation tokens | A token's owner can be of any type; its renewers must be `User` (`INVALID_PRINCIPAL_TYPE`). A workload with an SVID has no use for a token. |
+
+`User` remains for authorizers and operators that understand no other type, such as Confluent's RBAC, Apache Ranger, or ACLs generated by Strimzi's `KafkaUser`. The OPA plugin is given the type and can match either.
+
 ### ACLs
 
 - `ssl.principal.mapping.rules` is used only by Kafka's default builder, so it has no effect once this one is configured; a value other than `DEFAULT` is logged as a warning.
-- `StandardAuthorizer` matches principals literally (the only wildcard is `User:*`). A group of workloads, such as a Kubernetes namespace, is one principal only through a mapping rule: `RULE:^spiffe://aether\.internal/ns/payments/sa/.*$/spiffe-group:aether.internal:payments/`.
+- `StandardAuthorizer` matches principals literally (the only wildcard is `User:*`, which matches every type). A group of workloads, such as a Kubernetes namespace, is one principal only through a mapping rule: `RULE:^spiffe://aether\.internal/ns/payments/sa/.*$/spiffe-group:aether.internal:payments/`.
 - A rule that drops the trust domain lets one trust domain produce the principal of another; such a rule is warned about at configuration time.
-- `kafka-acls.sh --add --allow-principal 'User:spiffe://aether.internal/ns/foo/sa/bar' --operation Read --topic orders` works: Kafka splits a principal at its first `:`. `super.users` is separated by `;`.
+- `kafka-acls.sh --add --allow-principal 'Spiffe:spiffe://aether.internal/ns/foo/sa/bar' --operation Read --topic orders` works: Kafka splits a principal at its first `:`. `super.users` is separated by `;`.
 
 ## 6. Failure and expiry
 
@@ -219,7 +236,8 @@ Logs go through slf4j, which Kafka provides: SPIFFE IDs, trust domains, expiry t
 6. The private key is only in memory: never on disk, never in Kafka's configuration (where an inline PEM key set through `AlterConfigs` would end up in the KRaft metadata log).
 7. The Workload API is reached only over a Unix domain socket, whose file permissions are the deployment's to set.
 8. The inter-broker validation handshake needs the broker's own ID allowed; that is not a reason to allow everything.
-9. `User:ANONYMOUS` as a super user makes anyone who reaches that listener a super user: bind a plaintext controller listener to the loopback interface.
+9. The principal type `Spiffe` keeps SASL users, whose names an administrator sets, from matching the ACLs of a SPIFFE ID. Quotas, keyed by name alone, are still shared with a SASL user of the same name.
+10. `User:ANONYMOUS` as a super user makes anyone who reaches that listener a super user: bind a plaintext controller listener to the loopback interface.
 
 ## 9. Build, testing and packaging
 
@@ -234,7 +252,7 @@ A Bazel (bzlmod) repository in the style of [odradek](https://github.com/bpalerm
 - **Unit**: the SPIFFE ID parser against the specification's cases and `java-spiffe`'s; matchers; the wire reader against bytes written by protobuf's `CodedOutputStream` (a test-only dependency) and recorded SPIRE responses; `SvidValidator` and `SpiffeTrustManager` with certificates generated in the test (BouncyCastle, test-only: CA leaves, several URI SANs, wrong key usage, expired chains), at a set clock; mapping rules; the serde against `DefaultKafkaPrincipalBuilder`.
 - **A fake Workload API** (from odradek's `FakeWorkloadApi`): a gRPC server on a Unix socket that checks the security header and pushes publications, and can be told to fail (`PERMISSION_DENIED`, `UNAVAILABLE`, a closed stream), to delay, to serve several SVIDs with hints, and to change federated bundles.
 - **Engine pairs**, no broker: a client and a server `SSLEngine` from two factories, each on its own fake Workload API, handshaking in memory. Allowed and refused by ID, trust domain and pattern; an `aether.internal` client against a `nas.palermo.dev` broker, and a forged cross-trust-domain chain refused; a rotation, after which the next handshake presents the new SVID while the old session goes on, with no rebuild; bundle rotation; a federated bundle withdrawn; expiry; the validation handshake with an empty peer host.
-- **Kafka**: an in-process KRaft broker, with broker and client on fake Workload APIs and `StandardAuthorizer` ACLs on `User:spiffe://…`; producing and consuming across client and broker rotations (SVIDs of seconds) with no new connections (`connection-creation-total`); the inter-broker listener on TLS; a request forwarded to the controller, for the serde.
+- **Kafka**: an in-process KRaft broker, with broker and client on fake Workload APIs and `StandardAuthorizer` ACLs on `Spiffe:spiffe://…` (and one on `User:`, for the setting); producing and consuming across client and broker rotations (SVIDs of seconds) with no new connections (`connection-creation-total`); the inter-broker listener on TLS; a request forwarded to the controller, for the serde.
 - **End to end** (tagged `e2e`): two real SPIRE servers, federated, with agents; an `apache/kafka:4.x` broker with only the shaded jar added; a client container; 60-second SVIDs, so the run sees several rotations.
 - **The shaded jar**: a handshake with only `kafka-spiffe-all` and `kafka-clients` on the class path; no unrelocated `io/netty`, `io/grpc` or `com/google` classes; the relocated epoll library loads.
 
@@ -254,6 +272,7 @@ Once stable, the library can take over most of odradek's `tls` package (the Work
    - what Kafka does with a connection when `KafkaPrincipalBuilder.build` throws: closed as an authentication failure, or not (decides whether `reject` is offered);
    - whether `kafka-configs --alter` accepts `listener.name.X.spiffe.*` as dynamic configuration;
    - whether `listener.name.X.principal.builder.class` is honoured;
+   - a `Spiffe` principal end to end: an ACL added with `kafka-acls.sh`, a super user, and a request forwarded to the controller (the source says all three work; this runs them);
    - grpc-netty's epoll transport relocated and loading, or the JDK's Unix sockets instead; the transport (grpc-java, or our own HTTP/2);
    - which in-process Kafka 4 test cluster is published and usable;
    - what a Kafka 4.3 distribution's `libs/` holds (Netty, Guava).
@@ -272,7 +291,7 @@ Once stable, the library can take over most of odradek's `tls` package (the Work
 2. Is a shaded jar of about 10 MB acceptable in a broker, or should the spike weigh a dependency-free client seriously?
 3. What principals do the NAS broker's ACLs and super users name today: the SVID's subject DN, or names from `ssl.principal.mapping.rules`? The migration follows from it.
 4. Principals: the full SPIFFE ID (the default here), or group principals for `aether.internal` namespaces and service accounts?
-5. A peer that is verified but not allowed a principal: refused (if the spike shows Kafka closes it cleanly), or `User:spiffe-unauthorized`?
+5. A peer that is verified but not allowed a principal: refused (if the spike shows Kafka closes it cleanly), or `Spiffe:spiffe-unauthorized`?
 6. The NAS broker: combined broker and controller? A plaintext controller on the loopback interface, or SPIFFE there too, which takes `User:ANONYMOUS` out of `super.users`?
 7. SPIRE on the NAS: where is the agent's socket, and how is the Kafka container attested? That sets `spiffe.endpoint.socket` and the registration selectors.
 8. Federation both ways: broker entries `federatesWith` `aether.internal`, and client entries `federatesWith` `nas.palermo.dev`?
