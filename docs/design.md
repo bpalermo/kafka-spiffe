@@ -74,7 +74,8 @@ The library is compiled against `kafka-clients` 3.0.0, so a call into an API add
 
 - `X509Source` keeps one `FetchX509SVID` stream open. Each update that passes validation becomes an immutable `X509Context`, and an `SSLContext` is built for it on the update thread.
 - `createServerSslEngine` and `createClientSslEngine` take the current context. New handshakes use the newest SVID and bundles; open connections keep the session they negotiated and are not touched.
-- One `SSLContext` per snapshot means one session cache per snapshot: a session cannot be resumed across a rotation, and no handshake mixes the key of one snapshot with the trust of another. The session timeout is capped at the SVID's remaining lifetime.
+- One `SSLContext` per snapshot: no handshake mixes the key of one snapshot with the trust of another.
+- **Sessions are not resumed.** A session timeout counts from each session's creation, so no timeout can keep a session made late in an SVID's life from being resumed after that SVID, or the peer's, has expired, and a resumption checks neither certificate; a TLS 1.3 server's stateless tickets are in no cache that could be swept. Both session contexts therefore time sessions out after one second, the shortest the JDK allows (zero means no limit). Kafka's connections are long-lived, so a full handshake on reconnecting costs little.
 - `shouldBeRebuilt` is true only when a `spiffe.*` key, `ssl.enabled.protocols`, `ssl.cipher.suites` or `ssl.client.auth` changed. A rebuilt factory takes the same shared source, so a rebuild is cheap.
 
 ## 3. Components
@@ -83,8 +84,8 @@ One Bazel package per Java package, under `io.github.bpalermo.kafka.spiffe`:
 
 | Package | Contents | Depends on |
 |---|---|---|
-| `id` | `SpiffeId`, a strict parser of the SPIFFE ID specification (lowercase trust domain of `[a-z0-9._-]`, path segments of `[A-Za-z0-9._-]`, no empty, `.` or `..` segment, no trailing slash, port, user info, query, fragment or percent-encoding); `TrustDomain`; `SpiffeIdMatcher` (exact IDs, trust domains, path globs where `*` is one segment and `**` the rest) | JDK |
-| `x509` | `X509Svid`, `X509Bundle`, `BundleSet`, `X509Context` (the snapshot), `SvidValidator` (key matches leaf, validity, leaf constraints), `SpiffeTrustManager` (per-trust-domain PKIX and the matcher), `SnapshotSslContext` | JDK |
+| `id` | `SpiffeId`, a strict parser of the SPIFFE ID specification (lowercase trust domain of `[a-z0-9._-]`, path segments of `[A-Za-z0-9._-]`, no empty, `.` or `..` segment, no trailing slash, port, user info, query, fragment or percent-encoding); `TrustDomain`; `SpiffeIdMatcher` (exact IDs, trust domains, path globs where `*` is one whole segment and `**`, last only, one or more trailing segments) | JDK |
+| `x509` | `X509Svid`, `X509Bundle`, `BundleSet`, `X509Context` (the snapshot), `SvidLeaf` (the X.509-SVID leaf checks), `SvidValidator` (key matches leaf, validity, leaf constraints, own bundle present, no empty bundle), `SpiffeTrustManager` (per-trust-domain PKIX and the matcher; refusals carry a reason, `PeerRejectedException`), `SnapshotSslContext` | JDK |
 | `workload` | `WireReader` (the subset of the protobuf wire format the Workload API needs), `WorkloadApiClient` (`FetchX509SVID` with the `workload.spiffe.io: true` header), `X509Source` (the stream, reconnects with backoff and jitter, rejects a bad update and keeps the current snapshot, listeners, an injectable clock), `X509SourceRegistry` (one source per socket per process, reference-counted), `X509MaterialSource` (the interface another source of material, such as files, can implement) | gRPC, Netty |
 | `kafka` | `SpiffeSslEngineFactory`, `SpiffePrincipalBuilder`, `SpiffeConfig` (a `ConfigDef`), `PrincipalMapper` | `kafka-clients` (provided) |
 | `kafka.jca` | Optional, later: `SpiffeSecurityProviderCreator` and key and trust manager factories over the same source | `kafka-clients` |
@@ -120,13 +121,12 @@ Every key starts with `spiffe.`. They are read from the map Kafka passes to `con
 |---|---|
 | `spiffe.peer.allowed.ids` | Exact SPIFFE IDs |
 | `spiffe.peer.allowed.trust.domains` | Any ID of these trust domains |
-| `spiffe.peer.allowed.id.patterns` | Path globs, such as `spiffe://k8s.example.org/ns/*/sa/**` |
+| `spiffe.peer.allowed.id.patterns` | Path globs, such as `spiffe://k8s.example.org/ns/*/sa/**`: `*` is one whole segment, `**` (last only) one or more trailing segments, and the trust domain is exact. `web-*` is refused, not matched literally |
 
 At least one of the three is required, on clients and on brokers: there is no implicit "anything a bundle vouches for". A broker also requires `ssl.client.auth=required`, unless `spiffe.server.allow.unauthenticated=true`.
 
 ### TLS
 
-- `spiffe.tls.session.timeout.ms`, default 3600000, always capped at the SVID's remaining lifetime.
 - `ssl.protocol`, `ssl.enabled.protocols`, `ssl.cipher.suites`, `ssl.provider` and `ssl.client.auth` are honoured.
 - `ssl.endpoint.identification.algorithm` is ignored: host names are never verified (logged once). `ssl.keystore.*` and `ssl.truststore.*` are ignored, with a warning, since setting them suggests a mistake.
 
@@ -180,9 +180,12 @@ A broker reached by IP address needs no IP SAN: no host name is checked.
 
 A trust manager per snapshot, on `CertPathValidator` and `PKIXParameters` (so tests can set the clock):
 
-1. The leaf has exactly one URI SAN, a valid SPIFFE ID, is not a CA, and has neither `keyCertSign` nor `cRLSign`.
-2. The trust domain is that of the leaf's SPIFFE ID, and the chain is validated **against that trust domain's bundle only**. A federated CA (`k8s.example.org`) can never vouch for `spiffe://example.org/...`.
-3. The ID is matched against the allow-list.
+1. The leaf has exactly one URI SAN, a valid SPIFFE ID that is not a trust domain's own ID, is not a CA, and has a key usage with `digitalSignature` and neither `keyCertSign` nor `cRLSign`.
+2. The trust domain is that of the leaf's SPIFFE ID, and the chain is validated **against that trust domain's bundle only**. A federated CA (`k8s.example.org`) can never vouch for `spiffe://example.org/...`. Revocation is not checked (SVIDs are short-lived), and a root the peer sends along is dropped before validation.
+3. A leaf with an extended key usage must allow the purpose: `serverAuth` for a broker, `clientAuth` for a client.
+4. The ID is matched against the allow-list.
+
+A refusal carries its reason (malformed SVID, unknown trust domain, chain, ID not allowed), which the metrics count (§7). The trust manager names no accepted issuers, so a broker asks for a client certificate without listing authorities, and a client whose SVID comes from an intermediate the broker does not hold still presents it: which authorities count is decided per trust domain by the verifier.
 
 Every engine has `setEndpointIdentificationAlgorithm(null)`. There is no fallback to host-name verification anywhere.
 
@@ -271,13 +274,14 @@ Logs go through slf4j, which Kafka provides: SPIFFE IDs, trust domains, expiry t
 2. A trust domain's bundle verifies only that trust domain's IDs, so federation cannot be used to forge an identity of another trust domain.
 3. Leaves are checked as the X.509-SVID specification requires; intermediates by ordinary PKIX, under the JDK's `jdk.certpath.disabledAlgorithms`.
 4. The principal comes only from the verified leaf's URI SAN, parsed strictly: non-canonical IDs (an uppercase trust domain, `//`, `/./`) are refused, so they cannot look like an ID an ACL names.
-5. Key, chain and trust come from one snapshot, and session resumption ends with the snapshot or the SVID's lifetime.
-6. The private key is only in memory: never on disk, never in Kafka's configuration (where an inline PEM key set through `AlterConfigs` would end up in the KRaft metadata log).
-7. The Workload API is reached only over a Unix domain socket, whose file permissions are the deployment's to set.
-8. The inter-broker validation handshake needs the broker's own ID allowed; that is not a reason to allow everything.
-9. The principal type `Spiffe` keeps SASL users, whose names an administrator sets, from matching the ACLs of a SPIFFE ID. Quotas, keyed by name alone, are still shared with a SASL user of the same name.
-10. A peer that gets no principal is kept out by ACLs alone (§5): an ALLOW ACL on `User:*` or `allow.everyone.if.no.acl.found=true` lets it in.
-11. `User:ANONYMOUS` as a super user makes anyone who reaches that listener a super user: bind a plaintext controller listener to the loopback interface.
+5. Key, chain and trust come from one snapshot, and sessions are not resumed, so every connection's certificates are checked when it is made.
+6. The algorithm constraints a connection's `SSLParameters` carry are applied to the peer's chain: the JDK adds no checks around an `X509ExtendedTrustManager`, and PKIX alone applies only `jdk.certpath.disabledAlgorithms`.
+7. The private key is only in memory: never on disk, never in Kafka's configuration (where an inline PEM key set through `AlterConfigs` would end up in the KRaft metadata log).
+8. The Workload API is reached only over a Unix domain socket, whose file permissions are the deployment's to set.
+9. The inter-broker validation handshake needs the broker's own ID allowed; that is not a reason to allow everything.
+10. The principal type `Spiffe` keeps SASL users, whose names an administrator sets, from matching the ACLs of a SPIFFE ID. Quotas, keyed by name alone, are still shared with a SASL user of the same name.
+11. A peer that gets no principal is kept out by ACLs alone (§5): an ALLOW ACL on `User:*` or `allow.everyone.if.no.acl.found=true` lets it in.
+12. `User:ANONYMOUS` as a super user makes anyone who reaches that listener a super user: bind a plaintext controller listener to the loopback interface.
 
 ## 9. Build, testing and packaging
 
@@ -332,7 +336,7 @@ Each Kafka version is its own `maven.install` repository, so the tests of one ve
    - which JDKs each 3.x version runs on (17 for all; 21 and 25 for some), and whether the `apache/kafka` images, published from 3.7, are enough for the end-to-end 3.x run;
    - what a Kafka 3.x and 4.x distribution's `libs/` holds (Netty, Guava).
 1. The repository: `MODULE.bazel` (one Maven repository per Kafka version), `.bazelrc` (Java 17, the JDK matrix), lint, the JUnit macro, CI, `AGENTS.md`.
-2. `id` and `x509`, with their tests.
+2. `id` and `x509`, with their tests. Done.
 3. `workload`: the reader, the client, `X509Source`, the registry, the fake Workload API, backoff and expiry, JMX.
 4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests.
 5. `SpiffePrincipalBuilder`: serde, mapping rules, per-listener policy, an authorizer test.

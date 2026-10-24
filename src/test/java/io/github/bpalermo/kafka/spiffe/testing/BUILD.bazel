@@ -1,0 +1,16 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+
+# Test-only helpers shared by the packages' tests: a BouncyCastle PKI that issues
+# X.509-SVIDs, malformed ones included, and an in-memory TLS handshake.
+java_library(
+    name = "testing",
+    testonly = True,
+    srcs = glob(["*.java"]),
+    javacopts = JAVACOPTS,
+    visibility = ["//src/test:__subpackages__"],
+    deps = [
+        "@maven//:org_bouncycastle_bcpkix_jdk18on",
+        "@maven//:org_bouncycastle_bcprov_jdk18on",
+    ],
+)

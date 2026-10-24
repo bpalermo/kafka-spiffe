@@ -6,4 +6,6 @@ java_library(
     srcs = glob(["*.java"]),
     javacopts = JAVACOPTS,
     visibility = ["//visibility:public"],
+    exports = ["//src/main/java/io/github/bpalermo/kafka/spiffe/id"],
+    deps = ["//src/main/java/io/github/bpalermo/kafka/spiffe/id"],
 )

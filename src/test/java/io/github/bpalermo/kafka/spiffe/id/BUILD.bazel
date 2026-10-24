@@ -5,7 +5,11 @@ java_junit_test(
     name = "id_test",
     srcs = glob(["*.java"]),
     javacopts = JAVACOPTS,
-    test_classes = ["io.github.bpalermo.kafka.spiffe.id.PlaceholderTest"],
+    test_classes = [
+        "io.github.bpalermo.kafka.spiffe.id.SpiffeIdMatcherTest",
+        "io.github.bpalermo.kafka.spiffe.id.SpiffeIdTest",
+        "io.github.bpalermo.kafka.spiffe.id.TrustDomainTest",
+    ],
     deps = [
         "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
         "@maven//:org_junit_jupiter_junit_jupiter_api",
