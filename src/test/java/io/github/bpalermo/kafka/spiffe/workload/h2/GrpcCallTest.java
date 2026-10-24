@@ -574,4 +574,99 @@ class GrpcCallTest {
     runner.join(5000);
     assertEquals(Code.CANCELLED, status[0].code());
   }
+
+  @Test
+  void skipsInformationalResponsesBeforeTheFinalOne() {
+    Result result =
+        run(
+            new Server()
+                .settings()
+                .headers(0, ":status", "103", "link", "</a>; rel=preload")
+                .responseHeaders()
+                .message(new byte[] {4})
+                .ok());
+    assertTrue(result.status().isOk(), result.status().toString());
+    assertEquals(1, result.messages().size());
+
+    Result switching = run(new Server().settings().headers(0, ":status", "101"));
+    assertEquals(Http2.PROTOCOL_ERROR, goAwayCode(switching));
+    Result ending = run(new Server().settings().headers(Http2.FLAG_END_STREAM, ":status", "103"));
+    assertEquals(Http2.PROTOCOL_ERROR, goAwayCode(ending));
+  }
+
+  @Test
+  void anHttpErrorWithABodyMapsFromItsStatus() {
+    for (Object[] pair :
+        new Object[][] {
+          {"503", Code.UNAVAILABLE}, {"401", Code.UNAUTHENTICATED}, {"200", Code.UNKNOWN}
+        }) {
+      Result result =
+          run(
+              new Server()
+                  .settings()
+                  .headers(0, ":status", (String) pair[0], "content-type", "text/plain")
+                  .frame(Http2.DATA, Http2.FLAG_END_STREAM, 1, new byte[] {'n', 'o'}));
+      assertEquals(pair[1], result.status().code(), (String) pair[0]);
+      assertTrue(result.messages().isEmpty());
+    }
+  }
+
+  @Test
+  void deliversEmptyMessagesThatEndAFrame() {
+    Server server = new Server().settings().responseHeaders();
+    server.frame(Http2.DATA, 0, 1, grpc(new byte[0]));
+    byte[] two = new byte[10];
+    two[4] = 0;
+    server.frame(Http2.DATA, 0, 1, two);
+    server.ok();
+    for (int chunk : new int[] {1, 3, Integer.MAX_VALUE}) {
+      Result result = run(server.bytes(), chunk);
+      assertTrue(result.status().isOk(), result.status().toString());
+      assertEquals(3, result.messages().size(), "chunk " + chunk);
+    }
+  }
+
+  @Test
+  void assemblesTheLargestMessageInLinearTime() {
+    byte[] grpc = grpc(new byte[GrpcCall.MAX_MESSAGE]);
+    Server server = new Server().settings().responseHeaders();
+    for (int offset = 0; offset < grpc.length; offset += Http2.MAX_FRAME_SIZE) {
+      server.frame(
+          Http2.DATA,
+          0,
+          1,
+          Arrays.copyOfRange(grpc, offset, Math.min(grpc.length, offset + Http2.MAX_FRAME_SIZE)));
+    }
+    byte[] script = server.ok().bytes();
+    Result result =
+        org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+            java.time.Duration.ofSeconds(20), () -> run(script, Integer.MAX_VALUE));
+    assertTrue(result.status().isOk(), result.status().toString());
+    assertEquals(GrpcCall.MAX_MESSAGE, result.messages().get(0).length);
+  }
+
+  @Test
+  void closingFromTheConsumerStopsDeliveryAndEndsAsCancelled() {
+    byte[] both = new byte[12];
+    both[4] = 1;
+    both[5] = 7;
+    both[10] = 1;
+    both[11] = 8;
+    byte[] script =
+        new Server().settings().responseHeaders().frame(Http2.DATA, 0, 1, both).ok().bytes();
+    ScriptedChannel channel = new ScriptedChannel(script, Integer.MAX_VALUE);
+    GrpcCall call = new GrpcCall(channel);
+    List<byte[]> messages = new ArrayList<>();
+    GrpcStatus status =
+        call.run(
+            "/a.B/C",
+            Map.of(),
+            new byte[0],
+            message -> {
+              messages.add(message);
+              call.close();
+            });
+    assertEquals(Code.CANCELLED, status.code());
+    assertEquals(1, messages.size());
+  }
 }

@@ -84,7 +84,8 @@ public final class GrpcCall implements Closeable {
       String path, Map<String, String> metadata, byte[] request, Consumer<byte[]> onMessage) {
     try {
       sendRequest(path, metadata, request);
-      return new Reader(onMessage).read();
+      GrpcStatus status = new Reader(onMessage).read();
+      return closed ? GrpcStatus.of(Code.CANCELLED, "the call was closed") : status;
     } catch (Http2.ConnectionError e) {
       goAway(e.code());
       return GrpcStatus.of(Code.INTERNAL, "HTTP/2 connection error: " + e.getMessage());
@@ -204,7 +205,10 @@ public final class GrpcCall implements Closeable {
   private final class Reader {
     private final Consumer<byte[]> onMessage;
     private final Hpack.Decoder decoder = new Hpack.Decoder(HEADER_TABLE_SIZE, MAX_HEADER_LIST);
-    private final ByteArrayOutputStream messages = new ByteArrayOutputStream();
+    private final byte[] prefix = new byte[5];
+    private int prefixFilled;
+    private byte[] body;
+    private int bodyFilled;
     private ByteArrayOutputStream headerBlock;
     private boolean headerBlockEndsStream;
     private boolean settingsSeen;
@@ -239,6 +243,9 @@ public final class GrpcCall implements Closeable {
         if (headerBlock != null && (type != Http2.CONTINUATION || stream != STREAM)) {
           throw new Http2.ConnectionError(
               Http2.PROTOCOL_ERROR, "a frame of type " + type + " inside a header block");
+        }
+        if (closed) {
+          return GrpcStatus.of(Code.CANCELLED, "the call was closed");
         }
         GrpcStatus end = frame(type, flags, stream, payload);
         if (end != null) {
@@ -415,13 +422,23 @@ public final class GrpcCall implements Closeable {
     private GrpcStatus headerList(List<Field> fields, boolean endStream)
         throws Http2.ConnectionError {
       if (!responseHeadersSeen) {
-        responseHeadersSeen = true;
         String status = value(fields, ":status");
         if (status == null || !status.matches("[0-9]{3}")) {
           throw new Http2.ConnectionError(
               Http2.PROTOCOL_ERROR, "a response without a valid :status");
         }
-        httpStatus = Integer.parseInt(status);
+        int code = Integer.parseInt(status);
+        if (code >= 100 && code < 200) {
+          // An informational response, such as 103, precedes the final one (RFC 9113 section
+          // 8.1). 101 has no meaning in HTTP/2, and an informational response cannot end a stream.
+          if (code == 101 || endStream) {
+            throw new Http2.ConnectionError(
+                Http2.PROTOCOL_ERROR, "an informational response " + code + " that is not allowed");
+          }
+          return null;
+        }
+        responseHeadersSeen = true;
+        httpStatus = code;
         String contentType = value(fields, "content-type");
         grpcResponse =
             httpStatus == 200 && contentType != null && contentType.startsWith("application/grpc");
@@ -431,7 +448,7 @@ public final class GrpcCall implements Closeable {
         throw new Http2.ConnectionError(Http2.PROTOCOL_ERROR, "trailers without END_STREAM");
       }
       GrpcStatus status = status(fields);
-      if (status.isOk() && messages.size() > 0) {
+      if (status.isOk() && (prefixFilled > 0 || body != null)) {
         return GrpcStatus.of(Code.INTERNAL, "the stream ended inside a message");
       }
       return status;
@@ -477,42 +494,74 @@ public final class GrpcCall implements Closeable {
         end -= payload[0] & 0xff;
       }
       if (grpcResponse) {
-        messages.write(payload, offset, end - offset);
-        GrpcStatus failed = deliver();
+        GrpcStatus failed = deliver(payload, offset, end);
         if (failed != null) {
           return failed;
         }
       }
       if ((flags & Http2.FLAG_END_STREAM) != 0) {
-        return GrpcStatus.of(Code.INTERNAL, "the stream ended without trailers");
+        // Without trailers there is no grpc-status: a non-gRPC response (an HTTP error with a
+        // body) is mapped from its HTTP status, a gRPC one is cut short.
+        if (httpStatus != 200) {
+          return GrpcStatus.ofHttp(httpStatus);
+        }
+        return grpcResponse
+            ? GrpcStatus.of(Code.INTERNAL, "the stream ended without trailers")
+            : GrpcStatus.of(Code.UNKNOWN, "a response that is not gRPC, without grpc-status");
       }
       credit(payload.length);
       return null;
     }
 
-    /** Hands every complete message to the consumer; returns a status if one is refused. */
-    private GrpcStatus deliver() {
-      byte[] buffered = messages.toByteArray();
-      int offset = 0;
-      while (buffered.length - offset >= 5) {
-        int compressed = buffered[offset];
-        int length = ByteBuffer.wrap(buffered, offset + 1, 4).getInt();
-        if (compressed != 0) {
-          return GrpcStatus.of(Code.INTERNAL, "a compressed message, though none was offered");
+    /**
+     * Adds a DATA frame's octets to the message being assembled, handing each message to the
+     * consumer as it completes, so that every octet is copied a fixed number of times. Returns a
+     * status if a message is refused, or if the call is closed from the consumer.
+     */
+    private GrpcStatus deliver(byte[] data, int from, int to) {
+      int position = from;
+      while (position < to) {
+        if (body == null) {
+          int n = Math.min(prefix.length - prefixFilled, to - position);
+          System.arraycopy(data, position, prefix, prefixFilled, n);
+          prefixFilled += n;
+          position += n;
+          if (prefixFilled < prefix.length) {
+            break;
+          }
+          int length = ByteBuffer.wrap(prefix, 1, 4).getInt();
+          if (prefix[0] != 0) {
+            return GrpcStatus.of(Code.INTERNAL, "a compressed message, though none was offered");
+          }
+          if (length < 0 || length > MAX_MESSAGE) {
+            return GrpcStatus.of(
+                Code.RESOURCE_EXHAUSTED, "a message larger than " + MAX_MESSAGE + " octets");
+          }
+          body = new byte[length];
+          bodyFilled = 0;
         }
-        if (length < 0 || length > MAX_MESSAGE) {
-          return GrpcStatus.of(
-              Code.RESOURCE_EXHAUSTED, "a message larger than " + MAX_MESSAGE + " octets");
+        int n = Math.min(body.length - bodyFilled, to - position);
+        System.arraycopy(data, position, body, bodyFilled, n);
+        bodyFilled += n;
+        position += n;
+        if (bodyFilled == body.length && complete()) {
+          return GrpcStatus.of(Code.CANCELLED, "the call was closed");
         }
-        if (buffered.length - offset - 5 < length) {
-          break;
-        }
-        onMessage.accept(java.util.Arrays.copyOfRange(buffered, offset + 5, offset + 5 + length));
-        offset += 5 + length;
       }
-      messages.reset();
-      messages.write(buffered, offset, buffered.length - offset);
+      // A message of no octets completes with its prefix, which may end the frame.
+      if (body != null && body.length == 0 && complete()) {
+        return GrpcStatus.of(Code.CANCELLED, "the call was closed");
+      }
       return null;
+    }
+
+    /** Hands the assembled message to the consumer; returns whether the call was closed. */
+    private boolean complete() {
+      byte[] message = body;
+      body = null;
+      prefixFilled = 0;
+      onMessage.accept(message);
+      return closed;
     }
 
     /** Returns flow-control credit for data consumed, once half a window has been. */
