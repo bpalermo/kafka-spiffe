@@ -273,6 +273,41 @@ class X509SourceTest {
   }
 
   @Test
+  void jitterIsNeverZero() {
+    for (Duration delay :
+        new Duration[] {
+          Duration.ofNanos(1), Duration.ofMillis(1), Duration.ofMillis(2), Duration.ofMillis(3)
+        }) {
+      for (int i = 0; i < 100; i++) {
+        long millis = X509Source.jittered(delay).toMillis();
+        assertTrue(millis >= 1 && millis <= Math.max(1, delay.toMillis()), delay + ": " + millis);
+      }
+    }
+  }
+
+  @Test
+  void aCancelledStreamLeavesTheOthersTheirRotations() throws Exception {
+    api.publish(response(OWN.svid("/broker")));
+    X509Source other =
+        X509Source.start(
+            new X509Source.Settings(
+                api.socket(),
+                "",
+                null,
+                Set.of(TrustDomain.parse("example.org")),
+                Duration.ofMillis(20),
+                Duration.ofMillis(200)),
+            CLOCK);
+    source = X509Source.start(settings(), CLOCK);
+    source.awaitFirst(WAIT);
+    other.awaitFirst(WAIT);
+    other.close();
+    Thread.sleep(200);
+    api.publish(response(OWN.svid("/broker")));
+    eventually(() -> source.updates() == 2, "the rotation after the other stream was cancelled");
+  }
+
+  @Test
   void jitterStaysBetweenHalfAndAllOfTheDelay() {
     for (int i = 0; i < 1000; i++) {
       long millis = X509Source.jittered(Duration.ofMillis(1000)).toMillis();

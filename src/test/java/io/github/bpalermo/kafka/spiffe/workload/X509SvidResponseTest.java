@@ -93,6 +93,20 @@ class X509SvidResponseTest {
             new byte[] {(byte) 0x80}, // a varint cut short
             new byte[] {0x00}, // field number 0
             new byte[] {0x0b}, // wire type 3, a group
+            // An unknown field whose ten-octet length is 2^64, which would wrap to 0.
+            new byte[] {
+              0x7a,
+              (byte) 0x80,
+              (byte) 0x80,
+              (byte) 0x80,
+              (byte) 0x80,
+              (byte) 0x80,
+              (byte) 0x80,
+              (byte) 0x80,
+              (byte) 0x80,
+              (byte) 0x80,
+              0x02
+            },
             // An unknown length-delimited field whose ten-octet length is negative as a long.
             new byte[] {
               0x7a,
@@ -171,5 +185,27 @@ class X509SvidResponseTest {
     out.writeByteArray(1, inner.toByteArray());
     out.flush();
     return outer.toByteArray();
+  }
+
+  @Test
+  void skipsUnknownFieldsOfTheLargestNumbers() throws Exception {
+    java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+    CodedOutputStream out = CodedOutputStream.newInstance(bytes);
+    out.writeUInt64(1 << 28, 5); // tag 0x80000000: negative as an int
+    out.writeUInt64((1 << 29) - 1, 5); // the largest field number
+    out.writeByteArray(1, svidMessage(OWN.svid("/a")));
+    out.flush();
+    assertEquals(1, X509SvidResponse.parse(bytes.toByteArray()).svids().size());
+  }
+
+  private static byte[] svidMessage(TestPki.Issued issued) throws Exception {
+    java.io.ByteArrayOutputStream inner = new java.io.ByteArrayOutputStream();
+    CodedOutputStream message = CodedOutputStream.newInstance(inner);
+    message.writeString(1, "spiffe://example.org/a");
+    message.writeByteArray(2, issued.leaf().getEncoded());
+    message.writeByteArray(3, issued.key().getEncoded());
+    message.writeByteArray(4, OWN.certificate().getEncoded());
+    message.flush();
+    return inner.toByteArray();
   }
 }

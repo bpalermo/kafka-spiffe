@@ -366,10 +366,11 @@ public final class X509Source implements X509MaterialSource {
     return new ObjectName(name.toString());
   }
 
-  /** A delay between half and all of {@code delay}. */
+  /** A delay between half and all of {@code delay}, and never under a millisecond. */
   static Duration jittered(Duration delay) {
-    long millis = delay.toMillis();
-    return Duration.ofMillis(millis / 2 + ThreadLocalRandom.current().nextLong(millis / 2 + 1));
+    long millis = Math.max(1, delay.toMillis());
+    long half = (millis + 1) / 2;
+    return Duration.ofMillis(half + ThreadLocalRandom.current().nextLong(millis - half + 1));
   }
 
   private void onResponse(byte[] message) {

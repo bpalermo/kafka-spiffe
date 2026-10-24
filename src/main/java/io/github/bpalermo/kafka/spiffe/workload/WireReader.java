@@ -35,14 +35,16 @@ final class WireReader {
   }
 
   /**
-   * Reads the next field's tag: its number in the high bits, its wire type in the low three.
+   * Reads the next field's tag: its number in the high bits, its wire type in the low three. A tag
+   * is an unsigned 32-bit value (field numbers go up to 2^29 - 1), so the int returned may be
+   * negative; callers take the field number with {@code >>>}.
    *
    * @throws WireException if the input ends inside the tag, or the field number is 0
    */
   int tag() throws WireException {
     long tag = varint();
-    if (tag >>> 3 == 0 || tag > Integer.MAX_VALUE) {
-      throw new WireException("an invalid field tag " + tag);
+    if (tag >>> 3 == 0 || tag < 0 || tag > 0xffffffffL) {
+      throw new WireException("an invalid field tag " + Long.toUnsignedString(tag));
     }
     return (int) tag;
   }
@@ -102,6 +104,10 @@ final class WireReader {
         throw new WireException("the message ends inside a varint");
       }
       byte b = bytes[position++];
+      // The tenth octet holds only bit 63: anything more would overflow 64 bits.
+      if (shift == 63 && (b & 0x7e) != 0) {
+        throw new WireException("a varint that overflows 64 bits");
+      }
       value |= (long) (b & 0x7f) << shift;
       if ((b & 0x80) == 0) {
         return value;

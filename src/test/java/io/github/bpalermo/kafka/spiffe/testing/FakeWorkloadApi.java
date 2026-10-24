@@ -11,6 +11,7 @@ import io.grpc.ServerInterceptors;
 import io.grpc.ServerServiceDefinition;
 import io.grpc.Status;
 import io.grpc.netty.NettyServerBuilder;
+import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.ServerCalls;
 import io.grpc.stub.StreamObserver;
 import io.netty.channel.EventLoopGroup;
@@ -31,6 +32,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -73,7 +76,7 @@ public final class FakeWorkloadApi implements AutoCloseable {
 
   private final Path socket;
   private final List<StreamObserver<byte[]>> streams = new CopyOnWriteArrayList<>();
-  private final List<Status> failures = new CopyOnWriteArrayList<>();
+  private final Queue<Status> failures = new ConcurrentLinkedQueue<>();
   private final AtomicInteger calls = new AtomicInteger();
   private final Object lock = new Object();
   private volatile byte[] latest;
@@ -203,11 +206,20 @@ public final class FakeWorkloadApi implements AutoCloseable {
   }
 
   private void fetch(StreamObserver<byte[]> responses) {
-    Status failure = failures.isEmpty() ? failAll : failures.remove(0);
+    Status queued = failures.poll();
+    Status failure = queued == null ? failAll : queued;
     if (failure != null) {
       responses.onError(failure.asRuntimeException());
       return;
     }
+    // A stream the client cancels leaves the broadcast, or the next publish would fail on it.
+    ((ServerCallStreamObserver<byte[]>) responses)
+        .setOnCancelHandler(
+            () -> {
+              synchronized (lock) {
+                streams.remove(responses);
+              }
+            });
     // Under the lock, so that no response published, and no end of streams, falls between the
     // replay of the newest response and the subscription.
     synchronized (lock) {
