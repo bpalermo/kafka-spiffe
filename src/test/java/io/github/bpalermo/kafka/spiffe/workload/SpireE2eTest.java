@@ -15,6 +15,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterAll;
@@ -88,22 +92,32 @@ class SpireE2eTest {
   void recordsAResponse() throws Exception {
     AtomicReference<byte[]> recorded = new AtomicReference<>();
     long deadline = System.nanoTime() + WAIT.toNanos();
-    while (recorded.get() == null && System.nanoTime() < deadline) {
-      GrpcCall call = GrpcCall.connect(spire.socket());
-      GrpcStatus status =
-          call.run(
-              X509Source.METHOD,
-              X509Source.SECURITY_HEADER,
-              new byte[0],
-              message -> {
-                recorded.set(message);
-                call.close();
-              });
-      if (recorded.get() == null) {
-        Thread.sleep(500);
-        assertTrue(status.code() != GrpcStatus.Code.INVALID_ARGUMENT, status.toString());
+    ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
+    try {
+      while (recorded.get() == null && System.nanoTime() < deadline) {
+        GrpcCall call = GrpcCall.connect(spire.socket());
+        // The call reads a blocking socket: closing it is what ends a stream that never answers.
+        ScheduledFuture<?> expiry =
+            timer.schedule(call::close, deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+        GrpcStatus status =
+            call.run(
+                X509Source.METHOD,
+                X509Source.SECURITY_HEADER,
+                new byte[0],
+                message -> {
+                  recorded.set(message);
+                  call.close();
+                });
+        expiry.cancel(false);
+        if (recorded.get() == null) {
+          assertTrue(status.code() != GrpcStatus.Code.INVALID_ARGUMENT, status.toString());
+          Thread.sleep(500);
+        }
       }
+    } finally {
+      timer.shutdownNow();
     }
+    assertTrue(recorded.get() != null, "no response from the agent within " + WAIT);
     X509SvidResponse response = X509SvidResponse.parse(recorded.get());
     assertEquals(spire.workloadId(), response.svids().get(0).id().toString());
     String outputs = System.getenv("TEST_UNDECLARED_OUTPUTS_DIR");
