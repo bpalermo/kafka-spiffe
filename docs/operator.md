@@ -97,6 +97,24 @@ spiffe.peer.allowed.ids=spiffe://example.org/kafka/broker
 
 **Rotation needs no action.** A new SVID or bundle takes effect for every new connection, in brokers and clients, without a restart; open connections keep the session they made.
 
+### The same SVIDs outside Kafka
+
+An application whose other servers or clients need the SVIDs and bundles its Kafka clients use can take them from the library, on the same Workload API stream, instead of opening its own:
+
+```java
+SpiffeConfig config = SpiffeConfig.parse(kafkaClientConfig, System.getenv());
+try (X509MaterialSource source = config.acquireSource()) {
+  X509Context first = source.awaitFirst(Duration.ofMinutes(1));
+  SSLContext tls =
+      SnapshotSslContext.create(
+          first, config.peers(), new SnapshotSslContext.Settings("TLSv1.3", null), Clock.systemUTC());
+  source.addListener(next -> { /* a new snapshot: build the next SSLContext */ });
+  X509MaterialSource.Stats stats = source.stats(); // connected, updates, rejected, stream errors
+}
+```
+
+`acquireSource()` returns a handle on the source an engine factory configured with the same `spiffe.*` keys uses, so the two share one stream and see the same snapshots. Close the handle when done. These types are the library's public API (design, section 3).
+
 ## Principals and ACLs
 
 A client's principal is its full SPIFFE ID, under the type `Spiffe`: `Spiffe:spiffe://k8s.example.org/ns/payments/sa/api`. ACLs and `super.users` name it like any other principal:

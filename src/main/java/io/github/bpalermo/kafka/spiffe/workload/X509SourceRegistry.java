@@ -16,6 +16,12 @@ import org.slf4j.LoggerFactory;
  * One {@link X509Source} per set of settings per process, shared and reference-counted: a broker
  * makes an engine factory per network thread per listener and per inter-broker client (phase 0),
  * and all of them read the same stream.
+ *
+ * <p>Public API (design, section 3). The engine factory takes its source from {@link
+ * #shared(String)} with the JMX domain of its configuration, null when {@code
+ * spiffe.metrics.jmx.enabled=false}: an application that acquires settings of the same {@link
+ * X509Source.Identity} from the registry of the same domain shares the factory's source and its one
+ * stream. {@code SpiffeConfig.acquireSource()} does both from the factory's keys.
  */
 public final class X509SourceRegistry {
 
@@ -148,6 +154,11 @@ public final class X509SourceRegistry {
     @Override
     public void removeListener(Consumer<X509Context> listener) {
       entry.source.removeListener(listener);
+    }
+
+    @Override
+    public Stats stats() {
+      return entry.source.stats();
     }
 
     @Override

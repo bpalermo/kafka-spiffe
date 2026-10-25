@@ -10,6 +10,7 @@ package io.github.bpalermo.kafka.spiffe.id;
  * domain.
  *
  * @param name the trust domain's name, without a scheme
+ *     <p>Public API (design, section 3).
  */
 public record TrustDomain(String name) {
 

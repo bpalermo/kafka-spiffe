@@ -40,6 +40,8 @@ import org.slf4j.LoggerFactory;
  * it replaces the current snapshot; a response that fails keeps the current one (design, section
  * 6). {@code PERMISSION_DENIED}, which an agent returns while it has no registration entry for the
  * workload, is retried with a warning; {@code INVALID_ARGUMENT} is not retried.
+ *
+ * <p>Public API (design, section 3).
  */
 public final class X509Source implements X509MaterialSource {
 
@@ -221,6 +223,11 @@ public final class X509Source implements X509MaterialSource {
   /** When the snapshot was last replaced, or null. */
   public Instant lastUpdate() {
     return lastUpdate;
+  }
+
+  @Override
+  public Stats stats() {
+    return new Stats(connected, updates.get(), rejected.get(), streamErrors.get(), lastUpdate);
   }
 
   /** Whether the source gave up, after INVALID_ARGUMENT. */

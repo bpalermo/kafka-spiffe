@@ -20,6 +20,8 @@ import java.util.Set;
  *
  * <p>A matcher with nothing in it matches nothing: there is no implicit "anything a bundle vouches
  * for".
+ *
+ * <p>Public API (design, section 3).
  */
 public final class SpiffeIdMatcher {
 

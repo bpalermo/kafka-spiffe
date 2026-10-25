@@ -3,7 +3,9 @@ package io.github.bpalermo.kafka.spiffe.kafka;
 import io.github.bpalermo.kafka.spiffe.id.SpiffeId;
 import io.github.bpalermo.kafka.spiffe.id.SpiffeIdMatcher;
 import io.github.bpalermo.kafka.spiffe.id.TrustDomain;
+import io.github.bpalermo.kafka.spiffe.workload.X509MaterialSource;
 import io.github.bpalermo.kafka.spiffe.workload.X509Source;
+import io.github.bpalermo.kafka.spiffe.workload.X509SourceRegistry;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
@@ -23,6 +25,8 @@ import org.apache.kafka.common.config.ConfigException;
  * configure()} and validated: an unknown {@code spiffe.*} key, and a {@code
  * listener.name.<listener>.spiffe.*} key, are errors, so a typo or a form that cannot work does not
  * go unnoticed.
+ *
+ * <p>Public API (design, section 3).
  */
 public final class SpiffeConfig {
 
@@ -276,6 +280,17 @@ public final class SpiffeConfig {
   /** How the Workload API source is set up. */
   public X509Source.Settings source() {
     return source;
+  }
+
+  /**
+   * A handle on the Workload API source that an engine factory configured with these keys uses: the
+   * same shared source, while a factory holds it, so an application that needs the same SVIDs and
+   * bundles outside Kafka reads the same stream. Close the handle when done; the source stops when
+   * its last handle is closed. It connects in the background: {@link X509MaterialSource#awaitFirst}
+   * waits for its first snapshot.
+   */
+  public X509MaterialSource acquireSource() {
+    return X509SourceRegistry.shared(jmxDomain()).acquire(source);
   }
 
   /** The SPIFFE IDs accepted of peers in the handshake. */
