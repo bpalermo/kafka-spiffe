@@ -37,10 +37,14 @@ maven.install(
         "org.apache.kafka:kafka-clients:3.0.0",
         # Provided; 1.7.x is the API Kafka 3.0 ships, and what is called here exists in 2.x too.
         "org.slf4j:slf4j-api:1.7.36",
+        # Tests only: grpc-java on Netty's epoll serves the fake Workload API, and Netty's
+        # HPACK checks ours. Nothing of it reaches the library (design, section 3).
         "io.grpc:grpc-api:1.84.3",
         "io.grpc:grpc-core:1.84.3",
         "io.grpc:grpc-stub:1.84.3",
         "io.grpc:grpc-netty:1.84.3",
+        "io.netty:netty-codec-http2:4.2.16.Final",
+        "io.netty:netty-common:4.2.16.Final",
         "io.netty:netty-transport-native-epoll:jar:linux-x86_64:4.2.16.Final",
         "io.netty:netty-transport-native-epoll:jar:linux-aarch_64:4.2.16.Final",
         "io.netty:netty-transport-native-unix-common:4.2.16.Final",
