@@ -9,6 +9,7 @@ bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "rules_java", version = "9.9.0")
 bazel_dep(name = "rules_jvm_external", version = "7.1")
+bazel_dep(name = "rules_shell", version = "0.8.0")
 
 # Formatting and linting.
 bazel_dep(name = "aspect_rules_lint", version = "2.9.1")
@@ -33,9 +34,11 @@ maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
 maven.install(
     name = "maven",
     artifacts = [
-        # Provided at compile time; the floor of the supported range.
+        # Provided at compile time; the floor of the supported range. Also in the
+        # published POM (bazel/maven/pom.tpl), as a provided dependency.
         "org.apache.kafka:kafka-clients:3.0.0",
         # Provided; 1.7.x is the API Kafka 3.0 ships, and what is called here exists in 2.x too.
+        # Also in bazel/maven/pom.tpl.
         "org.slf4j:slf4j-api:1.7.36",
         # Tests only: grpc-java on Netty's epoll serves the fake Workload API, and Netty's
         # HPACK checks ours. Nothing of it reaches the library (design, section 3).

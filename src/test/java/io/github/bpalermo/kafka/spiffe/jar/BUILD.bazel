@@ -1,0 +1,24 @@
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+load("//bazel/java:junit.bzl", "java_junit_test")
+
+# The published artifact as Maven Central receives it (design, section 9): the jar,
+# its POM, and the sources and javadoc jars, read from the files java_export builds.
+java_junit_test(
+    name = "jar_test",
+    srcs = ["JarTest.java"],
+    data = [
+        "//:kafka-spiffe-docs",
+        "//:kafka-spiffe-maven-artifact",
+        "//:kafka-spiffe-maven-source",
+        "//:kafka-spiffe-pom",
+    ],
+    javacopts = JAVACOPTS,
+    jvm_flags = [
+        "-Djar.binary=$(rootpath //:kafka-spiffe-maven-artifact)",
+        "-Djar.docs=$(rootpath //:kafka-spiffe-docs)",
+        "-Djar.pom=$(rootpath //:kafka-spiffe-pom)",
+        "-Djar.sources=$(rootpath //:kafka-spiffe-maven-source)",
+    ],
+    test_classes = ["io.github.bpalermo.kafka.spiffe.jar.JarTest"],
+    deps = ["@maven//:org_junit_jupiter_junit_jupiter_api"],
+)

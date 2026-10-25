@@ -356,7 +356,8 @@ Each Kafka version is its own `maven.install` repository, so the tests of one ve
 ### Packaging
 
 - `io.github.bpalermo:kafka-spiffe`: one jar, for brokers and clients alike. Its only dependencies are `kafka-clients` (3.0 or later) and `slf4j-api`, both provided by whoever runs it; it bundles nothing, so there is nothing to relocate and no native library, and it runs wherever the JDK has Unix domain sockets and SPIRE serves the Workload API on one: Linux, Alpine included, and macOS. On Windows SPIRE uses a named pipe, which is not served. A broker takes it on its class path through `CLASSPATH` or in `libs/`.
-- Published to Maven Central, and the jar as a release asset, signed with cosign. `Automatic-Module-Name` in the manifest. Semantic versioning; Kafka 3.0 is the floor, and raising it is a major version.
+- Published to Maven Central, and the jar as a release asset, signed with cosign. `Automatic-Module-Name: io.github.bpalermo.kafka.spiffe` and `Implementation-Version` in the manifest. Semantic versioning; Kafka 3.0 is the floor, and raising it is a major version.
+- Built by `//:kafka-spiffe` (a `java_export`), with its POM, sources and javadoc. The POM lists `kafka-clients` 3.0.0 and `slf4j-api` 1.7.36 as provided and nothing else. The version lives in `bazel/version.bzl`, `0.0.0-dev` on main; a release sets it from the tag and never commits it.
 
 ## 10. Plan
 
