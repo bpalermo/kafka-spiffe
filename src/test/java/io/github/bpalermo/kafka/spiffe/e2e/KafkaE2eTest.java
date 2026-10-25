@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.logging.Logger;
@@ -71,6 +72,36 @@ class KafkaE2eTest {
       """
           .formatted(SOCKET, BROKER_ID);
 
+  private static final String CLIENT_ID = "spiffe://k8s.example.org/ns/payments/sa/api";
+
+  /**
+   * The producer's logging: Kafka's tools log at WARN, and the library says when it takes a new
+   * SVID at INFO. Kafka 3.9's tools read the first (log4j), 4.x's the second (log4j 2); each
+   * ignores the other's property.
+   */
+  private static final String TOOLS_LOG4J =
+      """
+      log4j.rootLogger=WARN, stderr
+      log4j.appender.stderr=org.apache.log4j.ConsoleAppender
+      log4j.appender.stderr.Target=System.err
+      log4j.appender.stderr.layout=org.apache.log4j.PatternLayout
+      log4j.appender.stderr.layout.ConversionPattern=[%d] %p %m (%c)%n
+      log4j.logger.io.github.bpalermo.kafka.spiffe=INFO
+      """;
+
+  private static final String TOOLS_LOG4J2 =
+      """
+      appender.stderr.type=Console
+      appender.stderr.name=STDERR
+      appender.stderr.target=SYSTEM_ERR
+      appender.stderr.layout.type=PatternLayout
+      appender.stderr.layout.pattern=[%d] %p %m (%c)%n
+      rootLogger.level=WARN
+      rootLogger.appenderRef.stderr.ref=STDERR
+      logger.spiffe.name=io.github.bpalermo.kafka.spiffe
+      logger.spiffe.level=INFO
+      """;
+
   private static final Pattern NEW_SVID =
       Pattern.compile("New X\\.509 SVID (spiffe://\\S+) from the Workload API");
 
@@ -128,6 +159,10 @@ class KafkaE2eTest {
       container.copyFileToContainer(
           MountableFile.forHostPath(write(CLIENT_PROPERTIES), 0644), "/tmp/client.properties");
     }
+    client.copyFileToContainer(
+        MountableFile.forHostPath(write(TOOLS_LOG4J), 0644), "/tmp/log4j.properties");
+    client.copyFileToContainer(
+        MountableFile.forHostPath(write(TOOLS_LOG4J2), 0644), "/tmp/log4j2.properties");
 
     // As the broker's own identity, a super user: the topic and the client's ACLs.
     admin("kafka-topics.sh", "--create", "--topic", "orders", "--partitions", "1");
@@ -160,7 +195,9 @@ class KafkaE2eTest {
         client,
         "sh",
         "-c",
-        ("i=0; while [ $i -lt %d ]; do echo order-$i; i=$((i+1)); sleep 1; done"
+        ("export KAFKA_LOG4J_OPTS=\"-Dlog4j.configuration=file:/tmp/log4j.properties"
+                + " -Dlog4j2.configurationFile=/tmp/log4j2.properties\";"
+                + " i=0; while [ $i -lt %d ]; do echo order-$i; i=$((i+1)); sleep 1; done"
                 + " | %skafka-console-producer.sh --bootstrap-server broker:9093"
                 + " --producer.config /tmp/client.properties --topic orders"
                 + " --producer-property acks=all > /tmp/producer.log 2>&1;"
@@ -168,9 +205,12 @@ class KafkaE2eTest {
             .formatted(RECORDS, BIN)
             .transform(script -> "nohup sh -c '" + script + "' > /dev/null 2>&1 &"));
     sleepUntil(started.plus(Duration.ofSeconds(RECORDS / 3)));
+    long brokerSvidsBefore = svids(broker.getLogs(), BROKER_ID);
     LOG.info("Replacing the broker's agent");
     brokerDomain.restartAgent();
     sleepUntil(started.plus(Duration.ofSeconds(2 * RECORDS / 3)));
+    long producerSvidsBefore =
+        svids(client.execInContainer("cat", "/tmp/producer.log").getStdout(), CLIENT_ID);
     LOG.info("Replacing the client's agent");
     clientDomain.restartAgent();
 
@@ -204,18 +244,27 @@ class KafkaE2eTest {
     }
     assertEquals(expected, records, consumed.getStderr() + producerLog);
 
-    // The broker took a new SVID several times: at about half of each 60-second lifetime, and
-    // from each new agent.
-    long svids = broker.getLogs().lines().map(NEW_SVID::matcher).filter(Matcher::find).count();
-    assertTrue(svids >= 4, "the broker took " + svids + " SVIDs");
+    // Both took a new SVID several times, at about half of each 60-second lifetime, and each
+    // from its new agent: the stream recovered in the broker and in the producer's own JVM, which
+    // the consumer's handshakes alone would not show.
+    long brokerSvids = svids(broker.getLogs(), BROKER_ID);
+    assertTrue(brokerSvids >= 4, "the broker took " + brokerSvids + " SVIDs");
     assertTrue(
-        broker
-            .getLogs()
-            .lines()
-            .map(NEW_SVID::matcher)
-            .filter(Matcher::find)
-            .allMatch(m -> m.group(1).equals(BROKER_ID)),
-        "every SVID of the broker is " + BROKER_ID);
+        brokerSvids > brokerSvidsBefore,
+        "the broker took no SVID after its agent was replaced (" + brokerSvids + " in all)");
+    long producerSvids = svids(producerLog, CLIENT_ID);
+    assertTrue(producerSvids >= 3, "the producer took " + producerSvids + " SVIDs\n" + producerLog);
+    assertTrue(
+        producerSvids > producerSvidsBefore,
+        "the producer took no SVID after its agent was replaced\n" + producerLog);
+  }
+
+  /** How many SVIDs {@code log} says were taken; every one must be {@code id}. */
+  private static long svids(String log, String id) {
+    List<String> ids =
+        log.lines().map(NEW_SVID::matcher).filter(Matcher::find).map(m -> m.group(1)).toList();
+    assertTrue(ids.stream().allMatch(id::equals), "SVIDs other than " + id + ": " + ids);
+    return ids.size();
   }
 
   /** The broker, configured only through the image's environment (docs/operator.md). */
