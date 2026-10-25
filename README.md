@@ -28,7 +28,9 @@ A broker sets the same factory together with `principal.builder.class=io.github.
 - verifying a release;
 - every configuration key.
 
-Not released yet. Releases will publish `io.github.bpalermo:kafka-spiffe` on Maven Central, and the jar on GitHub with a cosign signature.
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.bpalermo/kafka-spiffe)](https://central.sonatype.com/artifact/io.github.bpalermo/kafka-spiffe)
+
+Releases are on Maven Central as `io.github.bpalermo:kafka-spiffe`, signed with the release key, and on [GitHub](https://github.com/bpalermo/kafka-spiffe/releases) with the jar and POM signed by cosign.
 
 ## Design
 
