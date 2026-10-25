@@ -82,6 +82,9 @@ class KraftBrokerTest {
   /** Verified in the handshake, but outside the principal allow-list. */
   private static final String OUTSIDER = "spiffe://k8s.example.org/batch/job";
 
+  /** Inside it, to show when an ACL has reached both brokers. */
+  private static final String CONTROL = "spiffe://k8s.example.org/ns/control/sa/c";
+
   private static final String BROKER_DOMAIN = "kafka.spiffe";
   private static final String CLIENT_DOMAIN = "kafka.spiffe.client";
   private static final Duration WAIT = Duration.ofSeconds(60);
@@ -135,7 +138,9 @@ class KraftBrokerTest {
     configs.put("transaction.state.log.replication.factor", "2");
     configs.put("transaction.state.log.min.isr", "1");
     configs.put("group.initial.rebalance.delay.ms", "0");
-    cluster = KraftCluster.named().start(2, configs);
+    // Assigned before it starts, so that teardown stops what a failed start leaves running.
+    cluster = KraftCluster.named();
+    cluster.start(2, configs);
   }
 
   @AfterAll
@@ -195,13 +200,25 @@ class KraftBrokerTest {
         .createAcls(List.of(acl(OUTSIDER, ResourceType.TOPIC, "payments", AclOperation.WRITE)))
         .all()
         .get();
+    // The brokers apply the metadata log in order: once a later ACL lets CONTROL write to the
+    // partition each broker leads, both brokers have OUTSIDER's.
+    owner
+        .createAcls(List.of(acl(CONTROL, ResourceType.TOPIC, "payments", AclOperation.WRITE)))
+        .all()
+        .get();
+    KafkaProducer<String, String> control = producer(agent(CONTROL));
+    for (int partition = 0; partition < 2; partition++) {
+      send(control, new ProducerRecord<>("payments", partition, "k", "v"));
+    }
+
     FakeWorkloadApi outsider = agent(OUTSIDER);
     KafkaProducer<String, String> producer = producer(outsider);
-    ExecutionException produced =
-        assertThrows(
-            ExecutionException.class,
-            () -> producer.send(new ProducerRecord<>("payments", "k", "v")).get());
-    assertInstanceOf(TopicAuthorizationException.class, produced.getCause());
+    for (int partition = 0; partition < 2; partition++) {
+      ProducerRecord<String, String> record = new ProducerRecord<>("payments", partition, "k", "v");
+      ExecutionException produced =
+          assertThrows(ExecutionException.class, () -> producer.send(record).get());
+      assertInstanceOf(TopicAuthorizationException.class, produced.getCause());
+    }
 
     // Forwarded to the controller as Spiffe:spiffe-unauthorized, which is no super user.
     Admin admin = admin(outsider);
@@ -488,8 +505,9 @@ class KraftBrokerTest {
       KafkaProducer<String, String> producer, KafkaConsumer<String, String> consumer)
       throws Exception {
     String marker = Long.toString(System.nanoTime());
+    // Both partitions, so both brokers, each the leader of one (createTopic).
     for (int i = 0; i < 5; i++) {
-      send(producer, new ProducerRecord<>("rotation", marker + i, marker));
+      send(producer, new ProducerRecord<>("rotation", i % 2, marker + i, marker));
     }
     assertEquals(
         5,
@@ -511,8 +529,12 @@ class KraftBrokerTest {
 
   // --- the cluster --------------------------------------------------------------------------
 
+  /** Two partitions on both brokers, broker 0 leading partition 0 and broker 1 partition 1. */
   private static void createTopic(Admin admin, String name) throws Exception {
-    admin.createTopics(List.of(new NewTopic(name, 2, (short) 2))).all().get();
+    admin
+        .createTopics(List.of(new NewTopic(name, Map.of(0, List.of(0, 1), 1, List.of(1, 0)))))
+        .all()
+        .get();
     awaitIsr(admin, name);
   }
 
