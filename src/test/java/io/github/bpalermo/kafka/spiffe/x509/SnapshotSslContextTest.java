@@ -1,7 +1,9 @@
 package io.github.bpalermo.kafka.spiffe.x509;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bpalermo.kafka.spiffe.id.SpiffeId;
 import io.github.bpalermo.kafka.spiffe.id.SpiffeIdMatcher;
@@ -19,6 +21,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
 import org.junit.jupiter.api.Test;
 
@@ -35,10 +38,16 @@ class SnapshotSslContextTest {
 
   private static SSLContext context(TestPki.Issued issued, SpiffeIdMatcher peers, String protocol)
       throws GeneralSecurityException {
+    return context(issued, peers, protocol, CLOCK);
+  }
+
+  private static SSLContext context(
+      TestPki.Issued issued, SpiffeIdMatcher peers, String protocol, Clock clock)
+      throws GeneralSecurityException {
     X509Context snapshot =
         new X509Context(X509Svid.of(issued.chain(), issued.key(), ""), BundleSet.of(BOTH));
     return SnapshotSslContext.create(
-        snapshot, peers, new SnapshotSslContext.Settings(protocol, null), CLOCK);
+        snapshot, peers, new SnapshotSslContext.Settings(protocol, null), clock);
   }
 
   private static SSLContext broker(TestPki.Issued issued) throws GeneralSecurityException {
@@ -188,21 +197,60 @@ class SnapshotSslContextTest {
   }
 
   /**
-   * After the broker's SVID has expired by the client's clock, a full handshake fails and only a
-   * resumed session could succeed: a resumption skips the certificate checks.
+   * A reconnection within the session timeout is resumed, so the engines verify the peer
+   * themselves; a full handshake's peer is verified by the trust manager alone.
    */
   @Test
-  void noSessionIsResumedOnceASecondHasPassed() throws Exception {
+  void aReconnectionWithinTheTimeoutIsResumedAndVerifiedByTheEngines() throws Exception {
+    for (String protocol : List.of("TLSv1.2", "TLSv1.3")) {
+      SSLContext client =
+          context(
+              CLIENT_CA.svid("/c"),
+              SpiffeIdMatcher.none().withIds(List.of("spiffe://example.org/broker")),
+              protocol);
+      SSLContext broker =
+          context(
+              BROKER_CA.svid("/broker"),
+              SpiffeIdMatcher.none().withTrustDomains(List.of("k8s.example.org")),
+              protocol);
+      VerifyingSslEngine[] full = engines(client, broker);
+      Handshake.run(full[0], full[1]);
+      assertFalse(full[0].verifiedAgain(), protocol + ": the client's first handshake");
+      assertFalse(full[1].verifiedAgain(), protocol + ": the broker's first handshake");
+
+      VerifyingSslEngine[] resumed = engines(client, broker);
+      Handshake.run(resumed[0], resumed[1]);
+      assertTrue(resumed[0].verifiedAgain(), protocol + ": the client resumed");
+      assertTrue(resumed[1].verifiedAgain(), protocol + ": the broker resumed");
+    }
+  }
+
+  /** A client engine and a broker engine, as {@link #toBroker} makes them. */
+  private static VerifyingSslEngine[] engines(SSLContext client, SSLContext broker) {
+    SSLEngine clientEngine = client.createSSLEngine("broker.example.org", 9093);
+    clientEngine.setUseClientMode(true);
+    SSLEngine brokerEngine = broker.createSSLEngine();
+    brokerEngine.setUseClientMode(false);
+    brokerEngine.setNeedClientAuth(true);
+    return new VerifyingSslEngine[] {
+      (VerifyingSslEngine) clientEngine, (VerifyingSslEngine) brokerEngine
+    };
+  }
+
+  /**
+   * A reconnection within the session timeout is resumed, and a resumption skips the JDK's
+   * certificate checks; the client verifies the broker's SVID again all the same, so once that has
+   * expired by its clock, the reconnection is refused.
+   */
+  @Test
+  void theClientVerifiesAResumedSessionAgain() throws Exception {
     for (String protocol : List.of("TLSv1.2", "TLSv1.3")) {
       MovableClock clientClock = new MovableClock();
-      TestPki.Issued c = CLIENT_CA.svid("/c");
-      X509Context clientSnapshot =
-          new X509Context(X509Svid.of(c.chain(), c.key(), ""), BundleSet.of(BOTH));
       SSLContext client =
-          SnapshotSslContext.create(
-              clientSnapshot,
+          context(
+              CLIENT_CA.svid("/c"),
               SpiffeIdMatcher.none().withIds(List.of("spiffe://example.org/broker")),
-              new SnapshotSslContext.Settings(protocol, null),
+              protocol,
               clientClock);
       SSLContext broker =
           context(
@@ -212,14 +260,32 @@ class SnapshotSslContextTest {
       toBroker(client, broker);
 
       clientClock.set(TestPki.NOW.plus(Duration.ofHours(2)));
-      // Within the second the session is resumed: the test can tell a resumption apart.
-      try {
-        toBroker(client, broker);
-      } catch (SSLException e) {
-        throw new AssertionError(protocol + ": an immediate reconnection was not resumed", e);
-      }
+      assertEquals(
+          PeerRejectedException.Reason.CHAIN,
+          refusalOf(() -> toBroker(client, broker)),
+          protocol + ": a session was resumed after its peer's SVID expired");
+    }
+  }
 
-      Thread.sleep(1500);
+  /** The same on the broker's side, against a client whose SVID has expired by its clock. */
+  @Test
+  void theBrokerVerifiesAResumedSessionAgain() throws Exception {
+    for (String protocol : List.of("TLSv1.2", "TLSv1.3")) {
+      MovableClock brokerClock = new MovableClock();
+      SSLContext client =
+          context(
+              CLIENT_CA.svid("/c"),
+              SpiffeIdMatcher.none().withIds(List.of("spiffe://example.org/broker")),
+              protocol);
+      SSLContext broker =
+          context(
+              BROKER_CA.svid("/broker"),
+              SpiffeIdMatcher.none().withTrustDomains(List.of("k8s.example.org")),
+              protocol,
+              brokerClock);
+      toBroker(client, broker);
+
+      brokerClock.set(TestPki.NOW.plus(Duration.ofHours(2)));
       assertEquals(
           PeerRejectedException.Reason.CHAIN,
           refusalOf(() -> toBroker(client, broker)),

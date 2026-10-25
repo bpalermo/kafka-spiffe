@@ -107,8 +107,12 @@ class SpiffeSslEngineFactoryTest {
   }
 
   private SpiffeSslEngineFactory factory(Map<String, Object> configs) {
-    SpiffeSslEngineFactory factory =
-        new SpiffeSslEngineFactory(domain -> registry, clock, Map.of());
+    return factory(configs, clock);
+  }
+
+  /** A factory whose handshakes validate chains at {@code at}. */
+  private SpiffeSslEngineFactory factory(Map<String, Object> configs, Clock at) {
+    SpiffeSslEngineFactory factory = new SpiffeSslEngineFactory(domain -> registry, at, Map.of());
     factory.configure(configs);
     factories.add(factory);
     return factory;
@@ -248,6 +252,66 @@ class SpiffeSslEngineFactoryTest {
                 .client()
                 .getPeerCertificates());
     assertEquals(before, fromOldEngine);
+  }
+
+  /**
+   * A reconnection within the session timeout is resumed; once the peer's SVID has expired by one
+   * side's clock, that side refuses it all the same, whichever side it is.
+   */
+  @Test
+  void aResumedSessionWhosePeerHasExpiredIsRefusedOnEitherSide() throws Exception {
+    for (boolean byTheClient : List.of(true, false)) {
+      MovableClock moved = new MovableClock();
+      SpiffeSslEngineFactory client =
+          byTheClient ? factory(clientConfigs(), moved) : factory(clientConfigs());
+      SpiffeSslEngineFactory broker =
+          byTheClient ? factory(brokerConfigs()) : factory(brokerConfigs(), moved);
+      connect(client, broker);
+      moved.set(TestPki.NOW.plus(Duration.ofHours(2)));
+      assertEquals(
+          PeerRejectedException.Reason.CHAIN,
+          refusal(() -> connect(client, broker)),
+          byTheClient ? "the client" : "the broker");
+    }
+  }
+
+  /**
+   * A new bundle is a new snapshot, whose context has no session to resume: right after the broker
+   * takes a bundle without the root of the client's SVID, the client's next handshake is a full
+   * one, and refused.
+   */
+  @Test
+  void afterABundleRotationTheNextHandshakeIsAFullOne() throws Exception {
+    SpiffeSslEngineFactory client = factory(clientConfigs());
+    SpiffeSslEngineFactory broker = factory(brokerConfigs());
+    try (X509MaterialSource source =
+        registry.acquire(SpiffeConfig.parse(brokerConfigs(), Map.of()).source())) {
+      connect(client, broker);
+      long updates = source.stats().updates();
+      brokerAgent.publish(
+          new FakeWorkloadApi.Response()
+              .svid(FakeWorkloadApi.Svid.of(BROKER_CA.svid("/broker"), BROKER_CA))
+              .federated(
+                  "spiffe://k8s.example.org",
+                  List.of(TestPki.root("k8s.example.org").certificate())));
+      eventually(() -> source.stats().updates() > updates, "the broker's source takes the bundle");
+      assertEquals(PeerRejectedException.Reason.CHAIN, refusal(() -> connect(client, broker)));
+    }
+  }
+
+  private interface Attempt {
+    void run() throws SSLException;
+  }
+
+  /** The reason a handshake failed, which one side's trust manager gave. */
+  private static PeerRejectedException.Reason refusal(Attempt attempt) {
+    SSLException e = assertThrows(SSLException.class, attempt::run);
+    for (Throwable t = e; t != null; t = t.getCause()) {
+      if (t instanceof PeerRejectedException rejected) {
+        return rejected.reason();
+      }
+    }
+    throw new AssertionError("the handshake failed for another reason", e);
   }
 
   @Test
