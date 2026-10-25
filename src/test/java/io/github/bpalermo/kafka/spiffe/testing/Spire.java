@@ -79,10 +79,20 @@ public final class Spire implements AutoCloseable {
     Path directory = Files.createTempDirectory(Path.of("/tmp"), "spire");
     Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwxrwxrwx"));
     Spire spire = new Spire(trustDomain, directory);
-    spire.server.start();
-    spire.startAgent();
-    spire.register("/workload", svidTtl);
-    return spire;
+    try {
+      spire.server.start();
+      spire.startAgent();
+      spire.register("/workload", svidTtl);
+      return spire;
+    } catch (Exception | Error e) {
+      // The caller never gets a harness to close: release what has started, keeping this failure.
+      try {
+        spire.close();
+      } catch (RuntimeException cleanup) {
+        e.addSuppressed(cleanup);
+      }
+      throw e;
+    }
   }
 
   /** The agent's Workload API socket. */
