@@ -74,15 +74,18 @@ maven.install(
 
 # One repository per Kafka version the tests run against (design §9), so the tests
 # of one version never see another's jars. Each has its own lockfile. A repository
-# holds the version's kafka-clients now; the broker jars (kafka_2.13, the server
-# and metadata modules, the test cluster) are added to it when broker tests exist.
+# holds the version's kafka-clients and, from 3.3 (the first with KRaft in
+# production), kafka-metadata for StandardAuthorizer; the broker jars (kafka_2.13,
+# the server module, the test cluster) are added to it when broker tests exist.
 # Re-pin one: `REPIN=1 bazel run @kafka_3_0//:pin`.
 #
 # Versions are the latest patch release of each line in the matrix.
 [
     maven.install(
         name = "kafka_" + line,
-        artifacts = ["org.apache.kafka:kafka-clients:" + version],
+        artifacts = ["org.apache.kafka:kafka-clients:" + version] + (
+            [] if line == "3_0" else ["org.apache.kafka:kafka-metadata:" + version]
+        ),
         fail_if_repin_required = True,
         lock_file = "//bazel/maven:kafka_%s_install.json" % line,
         repositories = ["https://repo.maven.apache.org/maven2/"],
