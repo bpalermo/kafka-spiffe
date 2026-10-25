@@ -76,9 +76,11 @@ jobs:
       - name: bazel test //... on JDK ${{ matrix.jdk }}
         run: bazel test --config=ci --config=jdk${{ matrix.jdk }} //...
 
-  # The tests tagged e2e: a real SPIRE server and agent in containers, started by
-  # the test with Testcontainers (Docker is on GitHub's runners). They need the
-  # Docker socket, so they run outside Bazel's sandbox.
+  # The tests tagged e2e: a real SPIRE server and agent in containers, and the
+  # apache/kafka 3.9.2 and 4.4.0 images with the published jar on two federated
+  # SPIRE trust domains (a few minutes each, run side by side), all started by the
+  # tests with Testcontainers (Docker is on GitHub's runners). They need the Docker
+  # socket, so they run outside Bazel's sandbox.
   e2e:
     name: e2e
     runs-on: ubuntu-latest

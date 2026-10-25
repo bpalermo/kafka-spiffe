@@ -1,0 +1,40 @@
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+load("//bazel/java:junit.bzl", "java_junit_test")
+
+# End to end (design, section 9): an apache/kafka broker with only the published jar
+# added and a client container, on two federated SPIRE trust domains, with 60-second
+# SVIDs and both agents replaced while records flow. One target per image: the
+# newest 3.x and 4.x, both KRaft (images exist only from 3.7). Needs Docker.
+[
+    java_junit_test(
+        name = "kafka_%s_e2e_test" % name,
+        size = "large",
+        srcs = [
+            "KafkaE2eTest.java",
+            "SpireDomain.java",
+        ],
+        data = ["//:kafka-spiffe-maven-artifact"],
+        javacopts = JAVACOPTS,
+        jvm_flags = [
+            "-Djar.binary=$(rootpath //:kafka-spiffe-maven-artifact)",
+            "-Dkafka.image=" + image,
+        ],
+        tags = [
+            "e2e",
+            "no-sandbox",
+            "requires-network",
+        ],
+        test_classes = ["io.github.bpalermo.kafka.spiffe.e2e.KafkaE2eTest"],
+        runtime_deps = ["@maven//:org_slf4j_slf4j_api"],
+        deps = [
+            "@maven//:com_github_docker_java_docker_java_api",
+            "@maven//:org_junit_jupiter_junit_jupiter_api",
+            "@maven//:org_testcontainers_testcontainers",
+        ],
+    )
+    for name, image in [
+        # apache/kafka:3.9.2 (JDK 21) and 4.4.0 (JDK 25), pinned by digest.
+        ("3_9", "apache/kafka@sha256:05b4616e0702ef2729327705d54ad6b50ea70b271c4b730fabd2320789fb7b02"),
+        ("4_4", "apache/kafka@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f"),
+    ]
+]
