@@ -78,6 +78,7 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
   private List<String> cipherSuites;
   private String clientAuth;
   private X509MaterialSource source;
+  private PeerVerification verification;
   private Cleaner.Cleanable release;
   private volatile Snapshot snapshot;
 
@@ -123,10 +124,24 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
     }
     warnAboutIgnoredKeys(configs);
 
-    X509MaterialSource acquired = registries.apply(config.jmxDomain()).acquire(config.source());
+    PeerVerification counted = PeerVerification.acquire(config.jmxDomain());
+    X509MaterialSource acquired;
+    try {
+      acquired = registries.apply(config.jmxDomain()).acquire(config.source());
+    } catch (RuntimeException e) {
+      counted.release();
+      throw e;
+    }
+    verification = counted;
     source = acquired;
-    // The cleaning action holds the handle, never this factory.
-    release = CLEANER.register(this, acquired::close);
+    // The cleaning action holds the handle and the counts, never this factory.
+    release =
+        CLEANER.register(
+            this,
+            () -> {
+              acquired.close();
+              counted.release();
+            });
     try {
       source.awaitFirst(config.startupTimeout());
       rebuild(source.current());
@@ -261,7 +276,9 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
     }
     try {
       snapshot =
-          new Snapshot(context, SnapshotSslContext.create(context, config.peers(), tls, clock));
+          new Snapshot(
+              context,
+              SnapshotSslContext.create(context, config.peers(), tls, clock, verification));
     } catch (GeneralSecurityException e) {
       if (current == null) {
         throw new KafkaException("cannot make a TLS context of the SVID: " + e.getMessage(), e);

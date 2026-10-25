@@ -287,9 +287,9 @@ Threads: one daemon reader thread per socket; a source closes when the last fact
 JMX MBeans, which the Prometheus JMX exporter on a broker picks up:
 
 - `kafka.spiffe:type=x509-source,socket=<path>`: `connected`, `updates-total`, `updates-rejected-total`, `stream-errors-total`, `last-update-timestamp-ms`, `svid-expiry-timestamp-ms`, `svid-ttl-remaining-ms`, `bundle-count`, `bundle-trust-domains`.
-- `kafka.spiffe:type=peer-verification,mode=server|client`: `accepted-total`, and `rejected-total` by reason (unknown trust domain, chain, ID not allowed, malformed SVID).
+- `kafka.spiffe:type=peer-verification,mode=server|client`: `accepted-total`, `rejected-total`, and one `rejected-<reason>-total` per reason (`malformed-svid`, `unknown-trust-domain`, `chain`, `id-not-allowed`). `mode` is the side this process took in the handshake. The counts are the process's, per JMX domain, and kept for its life; the MBeans are registered while a factory of the domain is open. The trust manager reports each handshake's verdict to an observer, so `verify` called outside a handshake counts nothing.
 
-Logs go through slf4j, which Kafka provides: SPIFFE IDs, trust domains, expiry times, socket paths; never keys. Rejected peers are logged at a limited rate.
+Logs go through slf4j, which Kafka provides: SPIFFE IDs, trust domains, expiry times, socket paths; never keys. Rejected peers are logged at a limited rate (ten lines a minute, then a count of those dropped), with the reason and the peer's ID.
 
 ## 8. Security
 

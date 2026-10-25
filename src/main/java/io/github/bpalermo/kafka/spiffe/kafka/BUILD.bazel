@@ -10,6 +10,7 @@ java_library(
         "//bazel/maven:kafka_clients_provided",
         "//bazel/maven:slf4j_api_provided",
         "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/metrics",
         "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
         "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
     ],

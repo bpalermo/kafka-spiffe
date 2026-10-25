@@ -16,6 +16,7 @@ DEPS = [
 # builder relies on, which are the same from 3.0 to 4.4), so they run against every
 # version's jars.
 PORTABLE = [
+    "PeerVerificationTest",
     "SpiffeConfigTest",
     "SpiffePrincipalBuilderTest",
     "SpiffeSslEngineFactoryTest",
