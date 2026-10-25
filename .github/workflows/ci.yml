@@ -124,15 +124,11 @@ jobs:
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_3_0_test
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_4_4_test
 
-  # TODO(broker tests): the broker jobs of the design's CI matrix (section 9) go
-  # here, once there are tests for them. Each is a matrix over the Maven
-  # repositories of MODULE.bazel (kafka_3_0, kafka_3_3, kafka_3_9, kafka_4_0,
-  # kafka_4_4) running //matrix:<repo>_test-style targets built with
-  # kafka_version_test (//bazel/java:kafka.bzl):
-  #   - KRaft: 3.3, 3.9, 4.0, 4.4 (JDK 17; also 25 on 4.x)
-  #   - ZooKeeper (AclAuthorizer): 3.0, 3.9 (JDK 17)
-  #   - clients across versions.
-  # Add the job's name to `needs` of the `ci` job below.
+  # The KRaft broker tests of the design's CI matrix (section 9) run in the build and
+  # jdk jobs above: each starts its cluster in the test's process in seconds.
+  # TODO(broker tests): ZooKeeper brokers with AclAuthorizer (3.0, 3.9) and clients of
+  # one Kafka version against brokers of another, in those jobs too unless they turn
+  # out slow; a job of their own goes into `needs` of the `ci` job below.
 
   # The single check the main ruleset requires, and the only reason this job
   # exists.

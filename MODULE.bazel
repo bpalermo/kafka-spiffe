@@ -77,30 +77,94 @@ maven.install(
 
 # One repository per Kafka version the tests run against (design §9), so the tests
 # of one version never see another's jars. Each has its own lockfile. A repository
-# holds the version's kafka-clients and, from 3.3 (the first with KRaft in
-# production), kafka-metadata for StandardAuthorizer; the broker jars (kafka_2.13,
-# the server module, the test cluster) are added to it when broker tests exist.
-# Re-pin one: `REPIN=1 bazel run @kafka_3_0//:pin`.
+# holds the version's kafka-clients; from 3.3 (the first with KRaft in production)
+# kafka-metadata for StandardAuthorizer, and the broker and its test cluster for the
+# KRaft broker tests (design §9, "In-process test clusters"). JUnit and Netty (which
+# ZooKeeper brings to 3.x) are left out of them: the tests run on the main repository's
+# JUnit, which Kafka's test clusters only call for assertions, and the fake Workload
+# API on its Netty, which a KRaft broker does not use.
+# Re-pin one: `REPIN=1 bazel run @kafka_3_3//:pin`.
 #
 # Versions are the latest patch release of each line in the matrix.
+KAFKA_EXCLUDED = [
+    "io.netty:netty-buffer",
+    "io.netty:netty-codec",
+    "io.netty:netty-common",
+    "io.netty:netty-handler",
+    "io.netty:netty-resolver",
+    "io.netty:netty-transport",
+    "io.netty:netty-transport-classes-epoll",
+    "io.netty:netty-transport-native-epoll",
+    "io.netty:netty-transport-native-unix-common",
+    "org.junit.jupiter:junit-jupiter",
+    "org.junit.jupiter:junit-jupiter-api",
+    "org.junit.jupiter:junit-jupiter-engine",
+    "org.junit.jupiter:junit-jupiter-params",
+    "org.junit.platform:junit-platform-commons",
+    "org.junit.platform:junit-platform-engine",
+    "org.junit.platform:junit-platform-launcher",
+    "org.opentest4j:opentest4j",
+]
+
 [
     maven.install(
         name = "kafka_" + line,
-        artifacts = ["org.apache.kafka:kafka-clients:" + version] + (
-            [] if line == "3_0" else ["org.apache.kafka:kafka-metadata:" + version]
-        ),
+        artifacts = ["org.apache.kafka:kafka-clients:" + version] + [
+            a.format(v = version)
+            for a in extra
+        ],
+        excluded_artifacts = KAFKA_EXCLUDED,
         fail_if_repin_required = True,
         lock_file = "//bazel/maven:kafka_%s_install.json" % line,
         repositories = ["https://repo.maven.apache.org/maven2/"],
         strict_visibility = True,
     )
-    for line, version in {
-        "3_0": "3.0.2",
-        "3_3": "3.3.2",
-        "3_9": "3.9.2",
-        "4_0": "4.0.2",
-        "4_4": "4.4.0",
-    }.items()
+    for line, version, extra in [
+        ("3_0", "3.0.2", []),
+        (
+            "3_3",
+            "3.3.2",
+            [
+                "org.apache.kafka:kafka-metadata:{v}",
+                "org.apache.kafka:kafka_2.13:{v}",
+                "org.apache.kafka:kafka_2.13:jar:test:{v}",
+                "org.apache.kafka:kafka-clients:jar:test:{v}",
+                "org.apache.kafka:kafka-server-common:jar:test:{v}",
+                "org.apache.kafka:kafka-metadata:jar:test:{v}",
+            ],
+        ),
+        (
+            "3_9",
+            "3.9.2",
+            [
+                "org.apache.kafka:kafka-metadata:{v}",
+                "org.apache.kafka:kafka_2.13:{v}",
+                "org.apache.kafka:kafka_2.13:jar:test:{v}",
+                "org.apache.kafka:kafka-clients:jar:test:{v}",
+                "org.apache.kafka:kafka-server-common:jar:test:{v}",
+            ],
+        ),
+        (
+            "4_0",
+            "4.0.2",
+            [
+                "org.apache.kafka:kafka-metadata:{v}",
+                "org.apache.kafka:kafka_2.13:{v}",
+                "org.apache.kafka:kafka-test-common-runtime:{v}",
+            ],
+        ),
+        (
+            "4_4",
+            "4.4.0",
+            [
+                "org.apache.kafka:kafka-metadata:{v}",
+                "org.apache.kafka:kafka_2.13:{v}",
+                "org.apache.kafka:kafka-test-common-runtime:{v}",
+                "org.apache.kafka:kafka-clients:jar:test-fixtures:{v}",
+                "org.bouncycastle:bcpkix-jdk18on:1.86",
+            ],
+        ),
+    ]
 ]
 
 use_repo(

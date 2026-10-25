@@ -1,0 +1,16 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+
+# A broker of Kafka 3.3's test kit with property overrides, which only a class in the
+# kit's package can build (//src/test/java/io/github/bpalermo/kafka/spiffe/broker).
+java_library(
+    name = "testkit",
+    testonly = True,
+    srcs = ["BrokerNodes.java"],
+    javacopts = JAVACOPTS,
+    visibility = ["//src/test:__subpackages__"],
+    deps = [
+        "@kafka_3_3//:org_apache_kafka_kafka_2_13_test",
+        "@kafka_3_3//:org_apache_kafka_kafka_clients",
+    ],
+)

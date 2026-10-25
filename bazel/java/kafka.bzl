@@ -12,7 +12,7 @@ KAFKA_VERSIONS = {
     "kafka_4_4": "4.4.0",
 }
 
-def kafka_version_test(repo, version, test_classes, srcs, deps = [], runtime_deps = [], **kwargs):
+def kafka_version_test(repo, version, test_classes, srcs, deps = [], runtime_deps = [], jvm_flags = [], **kwargs):
     """A java_junit_test that runs against one Kafka version's jars.
 
     The sources compile against the provided kafka-clients 3.0.0 (so only APIs
@@ -26,13 +26,14 @@ def kafka_version_test(repo, version, test_classes, srcs, deps = [], runtime_dep
       srcs: test sources.
       deps: further compile-time deps.
       runtime_deps: further run time deps (the version's jars are added).
+      jvm_flags: further JVM flags.
       **kwargs: forwarded to java_junit_test.
     """
     java_junit_test(
         name = repo + "_test",
         srcs = srcs,
         javacopts = JAVACOPTS,
-        jvm_flags = ["-Dkafka.spiffe.expected.kafka.version=" + version],
+        jvm_flags = ["-Dkafka.spiffe.expected.kafka.version=" + version] + jvm_flags,
         runtime_deps = runtime_deps + ["@%s//:org_apache_kafka_kafka_clients" % repo],
         test_classes = test_classes,
         deps = deps + [
