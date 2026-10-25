@@ -10,7 +10,9 @@
     "io.netty:netty-transport-classes-epoll": -1183328424,
     "io.netty:netty-transport-native-epoll": 1585194621,
     "io.netty:netty-transport-native-unix-common": 1844752297,
-    "org.apache.kafka:kafka-clients": -756807138,
+    "org.apache.kafka:kafka-clients": 1178401090,
+    "org.apache.kafka:kafka-server-common": 897090820,
+    "org.apache.kafka:kafka_2.13": -1549211711,
     "org.junit.jupiter:junit-jupiter": -456604743,
     "org.junit.jupiter:junit-jupiter-api": 1748492556,
     "org.junit.jupiter:junit-jupiter-engine": -333291152,
@@ -22,30 +24,218 @@
     "repositories": -842695579
   },
   "__RESOLVED_ARTIFACTS_HASH": {
+    "com.fasterxml.jackson.core:jackson-annotations": -1907832035,
+    "com.fasterxml.jackson.core:jackson-core": -638730668,
+    "com.fasterxml.jackson.core:jackson-databind": -62082961,
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-csv": -1718580484,
+    "com.fasterxml.jackson.datatype:jackson-datatype-jdk8": -515055920,
+    "com.fasterxml.jackson.module:jackson-module-scala_2.13": 455743176,
     "com.github.luben:zstd-jni": 768422690,
+    "com.thoughtworks.paranamer:paranamer": -219271392,
+    "com.typesafe.scala-logging:scala-logging_2.13": 1020735441,
+    "com.yammer.metrics:metrics-core": 27085506,
+    "commons-cli:commons-cli": 1895746051,
+    "io.dropwizard.metrics:metrics-core": -1476812358,
+    "net.sf.jopt-simple:jopt-simple": 19860810,
+    "net.sourceforge.argparse4j:argparse4j": 611155008,
     "org.apache.kafka:kafka-clients": -1514823291,
+    "org.apache.kafka:kafka-clients:jar:test": -1655022570,
+    "org.apache.kafka:kafka-metadata": -1554042549,
+    "org.apache.kafka:kafka-raft": 640819335,
+    "org.apache.kafka:kafka-server-common": 585765290,
+    "org.apache.kafka:kafka-server-common:jar:test": 1009644342,
+    "org.apache.kafka:kafka-storage": 1223277022,
+    "org.apache.kafka:kafka-storage-api": 1617935165,
+    "org.apache.kafka:kafka_2.13": -1731637544,
+    "org.apache.kafka:kafka_2.13:jar:test": 1588369494,
+    "org.apache.yetus:audience-annotations": -1398534347,
+    "org.apache.zookeeper:zookeeper": -796247838,
+    "org.apache.zookeeper:zookeeper-jute": -293345271,
     "org.lz4:lz4-java": -545799691,
+    "org.scala-lang.modules:scala-collection-compat_2.13": 467069888,
+    "org.scala-lang.modules:scala-java8-compat_2.13": -285721806,
+    "org.scala-lang:scala-library": -2036619132,
+    "org.scala-lang:scala-reflect": 663922179,
     "org.slf4j:slf4j-api": -1709368792,
     "org.xerial.snappy:snappy-java": 1243798019
   },
   "artifacts": {
+    "com.fasterxml.jackson.core:jackson-annotations": {
+      "shasums": {
+        "jar": "ddf46e401a7d9ea3b481c263fa192285d13c50982a5882b22f806639b9645ee4"
+      },
+      "version": "2.12.6"
+    },
+    "com.fasterxml.jackson.core:jackson-core": {
+      "shasums": {
+        "jar": "0026cff293bdba389fbbbc67a20fdd5f73e091554ab46671efa654c25c807ee6"
+      },
+      "version": "2.12.6"
+    },
+    "com.fasterxml.jackson.core:jackson-databind": {
+      "shasums": {
+        "jar": "372541e41666f9946c6417bd32df76869b2ca688c9585f6ddfe549c0fc51e7a6"
+      },
+      "version": "2.12.6"
+    },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-csv": {
+      "shasums": {
+        "jar": "260750b16a5cad229fa351a109cdc60b717be71a51aea0af58c69382332282ac"
+      },
+      "version": "2.12.6"
+    },
+    "com.fasterxml.jackson.datatype:jackson-datatype-jdk8": {
+      "shasums": {
+        "jar": "3602428cafcef7819ac1fc718fe5b2ab933944f9f781874cbd44a50273bbcee2"
+      },
+      "version": "2.12.6"
+    },
+    "com.fasterxml.jackson.module:jackson-module-scala_2.13": {
+      "shasums": {
+        "jar": "1b4d42fc4b7913b23afc70807f702892b974eac8c7375a9e38d6d559ea04369c"
+      },
+      "version": "2.12.6"
+    },
     "com.github.luben:zstd-jni": {
       "shasums": {
         "jar": "b66a7029711976566c921ef255c57192fbbdc42a96c11ad3d879e6ad6001be12"
       },
       "version": "1.5.0-2"
     },
+    "com.thoughtworks.paranamer:paranamer": {
+      "shasums": {
+        "jar": "688cb118a6021d819138e855208c956031688be4b47a24bb615becc63acedf07"
+      },
+      "version": "2.8"
+    },
+    "com.typesafe.scala-logging:scala-logging_2.13": {
+      "shasums": {
+        "jar": "9b93cba6cb0317978828b2f89c62ea762ade6176f8d98afeac07fb71bfd136c2"
+      },
+      "version": "3.9.3"
+    },
+    "com.yammer.metrics:metrics-core": {
+      "shasums": {
+        "jar": "6b7a14a6f34c10f8683f7b5e2f39df0f07b58c7dff0e468ebbc713905c46979c"
+      },
+      "version": "2.2.0"
+    },
+    "commons-cli:commons-cli": {
+      "shasums": {
+        "jar": "fd3c7c9545a9cdb2051d1f9155c4f76b1e4ac5a57304404a6eedb578ffba7328"
+      },
+      "version": "1.4"
+    },
+    "io.dropwizard.metrics:metrics-core": {
+      "shasums": {
+        "jar": "cec34936faa625039f4e46123eccaa10a9eb9d9a40c6075830cd81330e259cf9"
+      },
+      "version": "4.1.12.1"
+    },
+    "net.sf.jopt-simple:jopt-simple": {
+      "shasums": {
+        "jar": "df26cc58f235f477db07f753ba5a3ab243ebe5789d9f89ecf68dd62ea9a66c28"
+      },
+      "version": "5.0.4"
+    },
+    "net.sourceforge.argparse4j:argparse4j": {
+      "shasums": {
+        "jar": "65ceb669d88f63306c680f8088bbf765bbca72d288a61a03703000076c3d3f56"
+      },
+      "version": "0.7.0"
+    },
     "org.apache.kafka:kafka-clients": {
       "shasums": {
-        "jar": "18661864d84e6c2c06e56c4a927a17bd95e29d99ad90ea71cbd3f3092bb864a7"
+        "jar": "18661864d84e6c2c06e56c4a927a17bd95e29d99ad90ea71cbd3f3092bb864a7",
+        "test": "fcc1a0549a1d11e5b6ad0b6359a4abb096995d154041614d072d35756d4dffbd"
       },
       "version": "3.0.2"
+    },
+    "org.apache.kafka:kafka-metadata": {
+      "shasums": {
+        "jar": "c4453926f89cbf1952aacc533334a66be01e6ef95213b3b712d69e8b796adc9d"
+      },
+      "version": "3.0.2"
+    },
+    "org.apache.kafka:kafka-raft": {
+      "shasums": {
+        "jar": "7d722e6b81d018a02fa1cd21a7f57076f7e266698d5143e4b5b26e7af44acaf6"
+      },
+      "version": "3.0.2"
+    },
+    "org.apache.kafka:kafka-server-common": {
+      "shasums": {
+        "jar": "888b0673714329b86483695c0155852cfe8e841e610eda91c14b3d9945adbe5c",
+        "test": "f7c578765d1bd4e2340e424005dd44e82092449dc57161f43acfb6eadca6cdd9"
+      },
+      "version": "3.0.2"
+    },
+    "org.apache.kafka:kafka-storage": {
+      "shasums": {
+        "jar": "20e620cdb2635b2caac13a0351367b93770a254274060728cd07e3beb5557c99"
+      },
+      "version": "3.0.2"
+    },
+    "org.apache.kafka:kafka-storage-api": {
+      "shasums": {
+        "jar": "6b270bbd7def7683955c2627164a8130f73514add6b0b3506aa1ff85eb24e3fe"
+      },
+      "version": "3.0.2"
+    },
+    "org.apache.kafka:kafka_2.13": {
+      "shasums": {
+        "jar": "be9c8f883d50e3f15928270a7c57084e74b3ec16dabc4c5ad53d8a3b48f0777a",
+        "test": "c7a58ff556ebeb7fb924b89ea939194e929077cb6ec948c3e6ded0ae6010e66f"
+      },
+      "version": "3.0.2"
+    },
+    "org.apache.yetus:audience-annotations": {
+      "shasums": {
+        "jar": "c82631f06c75d46bf6524d95f0d6c2e3aef1b3eb4a7b584ca296624ef0d474be"
+      },
+      "version": "0.5.0"
+    },
+    "org.apache.zookeeper:zookeeper": {
+      "shasums": {
+        "jar": "ac44de96d37a80d463c1e01aaa2ea86b19490fa17a37438d14491456c0e4a911"
+      },
+      "version": "3.6.3"
+    },
+    "org.apache.zookeeper:zookeeper-jute": {
+      "shasums": {
+        "jar": "6f463ade2b777f81e6c3e145b3fc03d4b39131b73dcf8c7f4b89ac4b1bacc9c5"
+      },
+      "version": "3.6.3"
     },
     "org.lz4:lz4-java": {
       "shasums": {
         "jar": "f1167a45d4b8002053670ef6991ca66d1bab9dcc03e4ef00183674d2f3fb9cac"
       },
       "version": "1.7.1"
+    },
+    "org.scala-lang.modules:scala-collection-compat_2.13": {
+      "shasums": {
+        "jar": "f17aec79f7588c60c028d879affe1bbbb92b3d2475cf8fa44b0afb9d3da2861f"
+      },
+      "version": "2.4.4"
+    },
+    "org.scala-lang.modules:scala-java8-compat_2.13": {
+      "shasums": {
+        "jar": "879b3e718453c8b934ff5e8225107a24701bde392f96daf6135f94f9e161dbc5"
+      },
+      "version": "1.0.0"
+    },
+    "org.scala-lang:scala-library": {
+      "shasums": {
+        "jar": "f19ed732e150d3537794fd3fe42ee18470a3f707efd499ecd05a99e727ff6c8a"
+      },
+      "version": "2.13.6"
+    },
+    "org.scala-lang:scala-reflect": {
+      "shasums": {
+        "jar": "f713593809b387c60935bb9a940dfcea53bd0dbf8fdc8d10739a2896f8ac56fa"
+      },
+      "version": "2.13.6"
     },
     "org.slf4j:slf4j-api": {
       "shasums": {
@@ -61,17 +251,242 @@
     }
   },
   "dependencies": {
+    "com.fasterxml.jackson.core:jackson-databind": [
+      "com.fasterxml.jackson.core:jackson-annotations",
+      "com.fasterxml.jackson.core:jackson-core"
+    ],
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-csv": [
+      "com.fasterxml.jackson.core:jackson-annotations",
+      "com.fasterxml.jackson.core:jackson-core",
+      "com.fasterxml.jackson.core:jackson-databind"
+    ],
+    "com.fasterxml.jackson.datatype:jackson-datatype-jdk8": [
+      "com.fasterxml.jackson.core:jackson-core",
+      "com.fasterxml.jackson.core:jackson-databind"
+    ],
+    "com.fasterxml.jackson.module:jackson-module-scala_2.13": [
+      "com.fasterxml.jackson.core:jackson-annotations",
+      "com.fasterxml.jackson.core:jackson-core",
+      "com.fasterxml.jackson.core:jackson-databind",
+      "com.thoughtworks.paranamer:paranamer",
+      "org.scala-lang:scala-library"
+    ],
+    "com.typesafe.scala-logging:scala-logging_2.13": [
+      "org.scala-lang:scala-library",
+      "org.scala-lang:scala-reflect",
+      "org.slf4j:slf4j-api"
+    ],
+    "com.yammer.metrics:metrics-core": [
+      "org.slf4j:slf4j-api"
+    ],
+    "io.dropwizard.metrics:metrics-core": [
+      "org.slf4j:slf4j-api"
+    ],
     "org.apache.kafka:kafka-clients": [
       "com.github.luben:zstd-jni",
       "org.lz4:lz4-java",
       "org.slf4j:slf4j-api",
       "org.xerial.snappy:snappy-java"
+    ],
+    "org.apache.kafka:kafka-clients:jar:test": [
+      "com.github.luben:zstd-jni",
+      "org.lz4:lz4-java",
+      "org.slf4j:slf4j-api",
+      "org.xerial.snappy:snappy-java"
+    ],
+    "org.apache.kafka:kafka-metadata": [
+      "com.fasterxml.jackson.core:jackson-databind",
+      "com.fasterxml.jackson.datatype:jackson-datatype-jdk8",
+      "com.yammer.metrics:metrics-core",
+      "org.apache.kafka:kafka-clients",
+      "org.apache.kafka:kafka-raft",
+      "org.apache.kafka:kafka-server-common"
+    ],
+    "org.apache.kafka:kafka-raft": [
+      "com.fasterxml.jackson.core:jackson-databind",
+      "org.apache.kafka:kafka-clients",
+      "org.apache.kafka:kafka-server-common",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.kafka:kafka-server-common": [
+      "org.apache.kafka:kafka-clients",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.kafka:kafka-server-common:jar:test": [
+      "org.apache.kafka:kafka-clients",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.kafka:kafka-storage": [
+      "com.fasterxml.jackson.core:jackson-databind",
+      "org.apache.kafka:kafka-clients",
+      "org.apache.kafka:kafka-server-common",
+      "org.apache.kafka:kafka-storage-api",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.kafka:kafka-storage-api": [
+      "org.apache.kafka:kafka-clients",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.kafka:kafka_2.13": [
+      "com.fasterxml.jackson.core:jackson-databind",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-csv",
+      "com.fasterxml.jackson.datatype:jackson-datatype-jdk8",
+      "com.fasterxml.jackson.module:jackson-module-scala_2.13",
+      "com.typesafe.scala-logging:scala-logging_2.13",
+      "com.yammer.metrics:metrics-core",
+      "commons-cli:commons-cli",
+      "io.dropwizard.metrics:metrics-core",
+      "net.sf.jopt-simple:jopt-simple",
+      "net.sourceforge.argparse4j:argparse4j",
+      "org.apache.kafka:kafka-clients",
+      "org.apache.kafka:kafka-metadata",
+      "org.apache.kafka:kafka-raft",
+      "org.apache.kafka:kafka-server-common",
+      "org.apache.kafka:kafka-storage",
+      "org.apache.zookeeper:zookeeper",
+      "org.scala-lang.modules:scala-collection-compat_2.13",
+      "org.scala-lang.modules:scala-java8-compat_2.13",
+      "org.scala-lang:scala-library",
+      "org.scala-lang:scala-reflect",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.kafka:kafka_2.13:jar:test": [
+      "com.fasterxml.jackson.core:jackson-databind",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-csv",
+      "com.fasterxml.jackson.datatype:jackson-datatype-jdk8",
+      "com.fasterxml.jackson.module:jackson-module-scala_2.13",
+      "com.typesafe.scala-logging:scala-logging_2.13",
+      "com.yammer.metrics:metrics-core",
+      "commons-cli:commons-cli",
+      "io.dropwizard.metrics:metrics-core",
+      "net.sf.jopt-simple:jopt-simple",
+      "net.sourceforge.argparse4j:argparse4j",
+      "org.apache.kafka:kafka-clients",
+      "org.apache.kafka:kafka-metadata",
+      "org.apache.kafka:kafka-raft",
+      "org.apache.kafka:kafka-server-common",
+      "org.apache.kafka:kafka-storage",
+      "org.apache.zookeeper:zookeeper",
+      "org.scala-lang.modules:scala-collection-compat_2.13",
+      "org.scala-lang.modules:scala-java8-compat_2.13",
+      "org.scala-lang:scala-library",
+      "org.scala-lang:scala-reflect",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.zookeeper:zookeeper": [
+      "org.apache.yetus:audience-annotations",
+      "org.apache.zookeeper:zookeeper-jute",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.zookeeper:zookeeper-jute": [
+      "org.apache.yetus:audience-annotations"
+    ],
+    "org.scala-lang.modules:scala-collection-compat_2.13": [
+      "org.scala-lang:scala-library"
+    ],
+    "org.scala-lang.modules:scala-java8-compat_2.13": [
+      "org.scala-lang:scala-library"
+    ],
+    "org.scala-lang:scala-reflect": [
+      "org.scala-lang:scala-library"
     ]
   },
   "packages": {
+    "com.fasterxml.jackson.core:jackson-annotations": [
+      "com.fasterxml.jackson.annotation"
+    ],
+    "com.fasterxml.jackson.core:jackson-core": [
+      "com.fasterxml.jackson.core",
+      "com.fasterxml.jackson.core.async",
+      "com.fasterxml.jackson.core.base",
+      "com.fasterxml.jackson.core.exc",
+      "com.fasterxml.jackson.core.filter",
+      "com.fasterxml.jackson.core.format",
+      "com.fasterxml.jackson.core.io",
+      "com.fasterxml.jackson.core.json",
+      "com.fasterxml.jackson.core.json.async",
+      "com.fasterxml.jackson.core.sym",
+      "com.fasterxml.jackson.core.type",
+      "com.fasterxml.jackson.core.util"
+    ],
+    "com.fasterxml.jackson.core:jackson-databind": [
+      "com.fasterxml.jackson.databind",
+      "com.fasterxml.jackson.databind.annotation",
+      "com.fasterxml.jackson.databind.cfg",
+      "com.fasterxml.jackson.databind.deser",
+      "com.fasterxml.jackson.databind.deser.impl",
+      "com.fasterxml.jackson.databind.deser.std",
+      "com.fasterxml.jackson.databind.exc",
+      "com.fasterxml.jackson.databind.ext",
+      "com.fasterxml.jackson.databind.introspect",
+      "com.fasterxml.jackson.databind.jdk14",
+      "com.fasterxml.jackson.databind.json",
+      "com.fasterxml.jackson.databind.jsonFormatVisitors",
+      "com.fasterxml.jackson.databind.jsonschema",
+      "com.fasterxml.jackson.databind.jsontype",
+      "com.fasterxml.jackson.databind.jsontype.impl",
+      "com.fasterxml.jackson.databind.module",
+      "com.fasterxml.jackson.databind.node",
+      "com.fasterxml.jackson.databind.ser",
+      "com.fasterxml.jackson.databind.ser.impl",
+      "com.fasterxml.jackson.databind.ser.std",
+      "com.fasterxml.jackson.databind.type",
+      "com.fasterxml.jackson.databind.util"
+    ],
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-csv": [
+      "com.fasterxml.jackson.dataformat.csv",
+      "com.fasterxml.jackson.dataformat.csv.impl"
+    ],
+    "com.fasterxml.jackson.datatype:jackson-datatype-jdk8": [
+      "com.fasterxml.jackson.datatype.jdk8"
+    ],
+    "com.fasterxml.jackson.module:jackson-module-scala_2.13": [
+      "com.fasterxml.jackson.module.scala",
+      "com.fasterxml.jackson.module.scala.deser",
+      "com.fasterxml.jackson.module.scala.experimental",
+      "com.fasterxml.jackson.module.scala.introspect",
+      "com.fasterxml.jackson.module.scala.modifiers",
+      "com.fasterxml.jackson.module.scala.ser",
+      "com.fasterxml.jackson.module.scala.util"
+    ],
     "com.github.luben:zstd-jni": [
       "com.github.luben.zstd",
       "com.github.luben.zstd.util"
+    ],
+    "com.thoughtworks.paranamer:paranamer": [
+      "com.thoughtworks.paranamer"
+    ],
+    "com.typesafe.scala-logging:scala-logging_2.13": [
+      "com.typesafe.scalalogging"
+    ],
+    "com.yammer.metrics:metrics-core": [
+      "com.yammer.metrics",
+      "com.yammer.metrics.core",
+      "com.yammer.metrics.reporting",
+      "com.yammer.metrics.stats",
+      "com.yammer.metrics.util"
+    ],
+    "commons-cli:commons-cli": [
+      "org.apache.commons.cli"
+    ],
+    "io.dropwizard.metrics:metrics-core": [
+      "com.codahale.metrics"
+    ],
+    "net.sf.jopt-simple:jopt-simple": [
+      "joptsimple",
+      "joptsimple.internal",
+      "joptsimple.util"
+    ],
+    "net.sourceforge.argparse4j:argparse4j": [
+      "net.sourceforge.argparse4j",
+      "net.sourceforge.argparse4j.annotation",
+      "net.sourceforge.argparse4j.helper",
+      "net.sourceforge.argparse4j.impl",
+      "net.sourceforge.argparse4j.impl.action",
+      "net.sourceforge.argparse4j.impl.choice",
+      "net.sourceforge.argparse4j.impl.type",
+      "net.sourceforge.argparse4j.inf",
+      "net.sourceforge.argparse4j.internal"
     ],
     "org.apache.kafka:kafka-clients": [
       "org.apache.kafka.clients",
@@ -129,10 +544,255 @@
       "org.apache.kafka.server.policy",
       "org.apache.kafka.server.quota"
     ],
+    "org.apache.kafka:kafka-clients:jar:test": [
+      "org.apache.kafka.clients",
+      "org.apache.kafka.clients.admin",
+      "org.apache.kafka.clients.admin.internals",
+      "org.apache.kafka.clients.consumer",
+      "org.apache.kafka.clients.consumer.internals",
+      "org.apache.kafka.clients.producer",
+      "org.apache.kafka.clients.producer.internals",
+      "org.apache.kafka.common",
+      "org.apache.kafka.common.acl",
+      "org.apache.kafka.common.cache",
+      "org.apache.kafka.common.compress",
+      "org.apache.kafka.common.config",
+      "org.apache.kafka.common.config.provider",
+      "org.apache.kafka.common.feature",
+      "org.apache.kafka.common.header.internals",
+      "org.apache.kafka.common.internals",
+      "org.apache.kafka.common.memory",
+      "org.apache.kafka.common.message",
+      "org.apache.kafka.common.metrics",
+      "org.apache.kafka.common.metrics.internals",
+      "org.apache.kafka.common.metrics.stats",
+      "org.apache.kafka.common.network",
+      "org.apache.kafka.common.protocol",
+      "org.apache.kafka.common.protocol.types",
+      "org.apache.kafka.common.record",
+      "org.apache.kafka.common.replica",
+      "org.apache.kafka.common.requests",
+      "org.apache.kafka.common.resource",
+      "org.apache.kafka.common.security",
+      "org.apache.kafka.common.security.auth",
+      "org.apache.kafka.common.security.authenticator",
+      "org.apache.kafka.common.security.kerberos",
+      "org.apache.kafka.common.security.oauthbearer",
+      "org.apache.kafka.common.security.oauthbearer.internals",
+      "org.apache.kafka.common.security.oauthbearer.internals.expiring",
+      "org.apache.kafka.common.security.oauthbearer.internals.unsecured",
+      "org.apache.kafka.common.security.plain.internals",
+      "org.apache.kafka.common.security.scram.internals",
+      "org.apache.kafka.common.security.ssl",
+      "org.apache.kafka.common.security.ssl.mock",
+      "org.apache.kafka.common.serialization",
+      "org.apache.kafka.common.utils",
+      "org.apache.kafka.test"
+    ],
+    "org.apache.kafka:kafka-metadata": [
+      "org.apache.kafka.common.metadata",
+      "org.apache.kafka.controller",
+      "org.apache.kafka.image",
+      "org.apache.kafka.metadata",
+      "org.apache.kafka.timeline"
+    ],
+    "org.apache.kafka:kafka-raft": [
+      "org.apache.kafka.raft",
+      "org.apache.kafka.raft.errors",
+      "org.apache.kafka.raft.generated",
+      "org.apache.kafka.raft.internals",
+      "org.apache.kafka.snapshot"
+    ],
+    "org.apache.kafka:kafka-server-common": [
+      "org.apache.kafka.queue",
+      "org.apache.kafka.server.common",
+      "org.apache.kafka.server.common.serialization"
+    ],
+    "org.apache.kafka:kafka-server-common:jar:test": [
+      "org.apache.kafka.queue"
+    ],
+    "org.apache.kafka:kafka-storage": [
+      "org.apache.kafka.server.log.remote.metadata.storage",
+      "org.apache.kafka.server.log.remote.metadata.storage.generated",
+      "org.apache.kafka.server.log.remote.metadata.storage.serialization",
+      "org.apache.kafka.server.log.remote.storage"
+    ],
+    "org.apache.kafka:kafka-storage-api": [
+      "org.apache.kafka.server.log.remote.storage"
+    ],
+    "org.apache.kafka:kafka_2.13": [
+      "kafka",
+      "kafka.admin",
+      "kafka.api",
+      "kafka.cluster",
+      "kafka.common",
+      "kafka.consumer",
+      "kafka.controller",
+      "kafka.coordinator.group",
+      "kafka.coordinator.transaction",
+      "kafka.internals.generated",
+      "kafka.log",
+      "kafka.message",
+      "kafka.metrics",
+      "kafka.network",
+      "kafka.raft",
+      "kafka.security",
+      "kafka.security.authorizer",
+      "kafka.serializer",
+      "kafka.server",
+      "kafka.server.checkpoints",
+      "kafka.server.epoch",
+      "kafka.server.metadata",
+      "kafka.tools",
+      "kafka.utils",
+      "kafka.utils.json",
+      "kafka.utils.timer",
+      "kafka.zk",
+      "kafka.zookeeper",
+      "org.apache.zookeeper"
+    ],
+    "org.apache.kafka:kafka_2.13:jar:test": [
+      "integration.kafka.admin",
+      "kafka",
+      "kafka.admin",
+      "kafka.api",
+      "kafka.api.test",
+      "kafka.cluster",
+      "kafka.common",
+      "kafka.controller",
+      "kafka.coordinator",
+      "kafka.coordinator.group",
+      "kafka.coordinator.transaction",
+      "kafka.integration",
+      "kafka.log",
+      "kafka.metrics",
+      "kafka.network",
+      "kafka.raft",
+      "kafka.security.auth",
+      "kafka.security.authorizer",
+      "kafka.security.minikdc",
+      "kafka.security.token.delegation",
+      "kafka.server",
+      "kafka.server.checkpoints",
+      "kafka.server.epoch",
+      "kafka.server.epoch.util",
+      "kafka.server.metadata",
+      "kafka.test",
+      "kafka.test.annotation",
+      "kafka.test.junit",
+      "kafka.testkit",
+      "kafka.tools",
+      "kafka.utils",
+      "kafka.utils.json",
+      "kafka.utils.timer",
+      "kafka.zk",
+      "kafka.zookeeper",
+      "unit.kafka.server.metadata"
+    ],
+    "org.apache.yetus:audience-annotations": [
+      "org.apache.yetus.audience",
+      "org.apache.yetus.audience.tools"
+    ],
+    "org.apache.zookeeper:zookeeper": [
+      "org.apache.zookeeper",
+      "org.apache.zookeeper.admin",
+      "org.apache.zookeeper.audit",
+      "org.apache.zookeeper.cli",
+      "org.apache.zookeeper.client",
+      "org.apache.zookeeper.common",
+      "org.apache.zookeeper.jmx",
+      "org.apache.zookeeper.metrics",
+      "org.apache.zookeeper.metrics.impl",
+      "org.apache.zookeeper.server",
+      "org.apache.zookeeper.server.admin",
+      "org.apache.zookeeper.server.auth",
+      "org.apache.zookeeper.server.command",
+      "org.apache.zookeeper.server.metric",
+      "org.apache.zookeeper.server.persistence",
+      "org.apache.zookeeper.server.quorum",
+      "org.apache.zookeeper.server.quorum.auth",
+      "org.apache.zookeeper.server.quorum.flexible",
+      "org.apache.zookeeper.server.util",
+      "org.apache.zookeeper.server.watch",
+      "org.apache.zookeeper.util",
+      "org.apache.zookeeper.version",
+      "org.apache.zookeeper.version.util"
+    ],
+    "org.apache.zookeeper:zookeeper-jute": [
+      "org.apache.jute",
+      "org.apache.jute.compiler",
+      "org.apache.jute.compiler.generated",
+      "org.apache.zookeeper.data",
+      "org.apache.zookeeper.proto",
+      "org.apache.zookeeper.server.persistence",
+      "org.apache.zookeeper.server.quorum",
+      "org.apache.zookeeper.txn"
+    ],
     "org.lz4:lz4-java": [
       "net.jpountz.lz4",
       "net.jpountz.util",
       "net.jpountz.xxhash"
+    ],
+    "org.scala-lang.modules:scala-collection-compat_2.13": [
+      "scala.collection.compat",
+      "scala.collection.compat.immutable",
+      "scala.util.control.compat"
+    ],
+    "org.scala-lang.modules:scala-java8-compat_2.13": [
+      "scala.compat.java8",
+      "scala.compat.java8.FunctionConverters",
+      "scala.compat.java8.collectionImpl",
+      "scala.compat.java8.converterImpl",
+      "scala.compat.java8.functionConverterImpls",
+      "scala.compat.java8.wrappers",
+      "scala.concurrent.java8"
+    ],
+    "org.scala-lang:scala-library": [
+      "scala",
+      "scala.annotation",
+      "scala.annotation.meta",
+      "scala.annotation.unchecked",
+      "scala.beans",
+      "scala.collection",
+      "scala.collection.concurrent",
+      "scala.collection.convert",
+      "scala.collection.convert.impl",
+      "scala.collection.generic",
+      "scala.collection.immutable",
+      "scala.collection.mutable",
+      "scala.compat",
+      "scala.concurrent",
+      "scala.concurrent.duration",
+      "scala.concurrent.impl",
+      "scala.io",
+      "scala.jdk",
+      "scala.jdk.javaapi",
+      "scala.math",
+      "scala.ref",
+      "scala.reflect",
+      "scala.reflect.macros.internal",
+      "scala.runtime",
+      "scala.sys",
+      "scala.sys.process",
+      "scala.util",
+      "scala.util.control",
+      "scala.util.hashing",
+      "scala.util.matching"
+    ],
+    "org.scala-lang:scala-reflect": [
+      "scala.reflect.api",
+      "scala.reflect.internal",
+      "scala.reflect.internal.annotations",
+      "scala.reflect.internal.pickling",
+      "scala.reflect.internal.settings",
+      "scala.reflect.internal.tpe",
+      "scala.reflect.internal.transform",
+      "scala.reflect.internal.util",
+      "scala.reflect.io",
+      "scala.reflect.macros",
+      "scala.reflect.macros.blackbox",
+      "scala.reflect.macros.whitebox",
+      "scala.reflect.runtime"
     ],
     "org.slf4j:slf4j-api": [
       "org.slf4j",
@@ -149,14 +809,71 @@
   },
   "repositories": {
     "https://repo.maven.apache.org/maven2/": [
+      "com.fasterxml.jackson.core:jackson-annotations",
+      "com.fasterxml.jackson.core:jackson-core",
+      "com.fasterxml.jackson.core:jackson-databind",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-csv",
+      "com.fasterxml.jackson.datatype:jackson-datatype-jdk8",
+      "com.fasterxml.jackson.module:jackson-module-scala_2.13",
       "com.github.luben:zstd-jni",
+      "com.thoughtworks.paranamer:paranamer",
+      "com.typesafe.scala-logging:scala-logging_2.13",
+      "com.yammer.metrics:metrics-core",
+      "commons-cli:commons-cli",
+      "io.dropwizard.metrics:metrics-core",
+      "net.sf.jopt-simple:jopt-simple",
+      "net.sourceforge.argparse4j:argparse4j",
       "org.apache.kafka:kafka-clients",
+      "org.apache.kafka:kafka-clients:jar:test",
+      "org.apache.kafka:kafka-metadata",
+      "org.apache.kafka:kafka-raft",
+      "org.apache.kafka:kafka-server-common",
+      "org.apache.kafka:kafka-server-common:jar:test",
+      "org.apache.kafka:kafka-storage",
+      "org.apache.kafka:kafka-storage-api",
+      "org.apache.kafka:kafka_2.13",
+      "org.apache.kafka:kafka_2.13:jar:test",
+      "org.apache.yetus:audience-annotations",
+      "org.apache.zookeeper:zookeeper",
+      "org.apache.zookeeper:zookeeper-jute",
       "org.lz4:lz4-java",
+      "org.scala-lang.modules:scala-collection-compat_2.13",
+      "org.scala-lang.modules:scala-java8-compat_2.13",
+      "org.scala-lang:scala-library",
+      "org.scala-lang:scala-reflect",
       "org.slf4j:slf4j-api",
       "org.xerial.snappy:snappy-java"
     ]
   },
   "services": {
+    "com.fasterxml.jackson.core:jackson-core": {
+      "com.fasterxml.jackson.core.JsonFactory": [
+        "com.fasterxml.jackson.core.JsonFactory"
+      ]
+    },
+    "com.fasterxml.jackson.core:jackson-databind": {
+      "com.fasterxml.jackson.core.ObjectCodec": [
+        "com.fasterxml.jackson.databind.ObjectMapper"
+      ]
+    },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-csv": {
+      "com.fasterxml.jackson.core.JsonFactory": [
+        "com.fasterxml.jackson.dataformat.csv.CsvFactory"
+      ],
+      "com.fasterxml.jackson.core.ObjectCodec": [
+        "com.fasterxml.jackson.dataformat.csv.CsvMapper"
+      ]
+    },
+    "com.fasterxml.jackson.datatype:jackson-datatype-jdk8": {
+      "com.fasterxml.jackson.databind.Module": [
+        "com.fasterxml.jackson.datatype.jdk8.Jdk8Module"
+      ]
+    },
+    "com.fasterxml.jackson.module:jackson-module-scala_2.13": {
+      "com.fasterxml.jackson.databind.Module": [
+        "com.fasterxml.jackson.module.scala.DefaultScalaModule"
+      ]
+    },
     "org.apache.kafka:kafka-clients": {
       "org.apache.kafka.common.config.provider.ConfigProvider": [
         "org.apache.kafka.common.config.provider.FileConfigProvider"

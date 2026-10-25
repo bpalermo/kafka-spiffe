@@ -4,13 +4,13 @@ import java.util.Map;
 import kafka.testkit.KafkaClusterTestKit;
 import kafka.testkit.TestKitNodes;
 
-/** A {@link KraftCluster} on Kafka 3.9's test kit. */
-public final class Kraft39 implements KraftCluster {
+/** A {@link BrokerCluster} on Kafka 3.9's test kit. */
+public final class Kraft39 implements BrokerCluster {
 
   private KafkaClusterTestKit cluster;
 
   @Override
-  public KraftCluster start(int brokers, Map<String, String> configs) throws Exception {
+  public BrokerCluster start(int brokers, Map<String, String> configs) throws Exception {
     TestKitNodes nodes =
         new TestKitNodes.Builder()
             .setCombined(false)
@@ -24,6 +24,11 @@ public final class Kraft39 implements KraftCluster {
     cluster.startup();
     cluster.waitForReadyBrokers();
     return this;
+  }
+
+  @Override
+  public boolean kraft() {
+    return true;
   }
 
   @Override

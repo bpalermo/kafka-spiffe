@@ -124,11 +124,12 @@ jobs:
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_3_0_test
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_4_4_test
 
-  # The KRaft broker tests of the design's CI matrix (section 9) run in the build and
-  # jdk jobs above: each starts its cluster in the test's process in seconds.
-  # TODO(broker tests): ZooKeeper brokers with AclAuthorizer (3.0, 3.9) and clients of
-  # one Kafka version against brokers of another, in those jobs too unless they turn
-  # out slow; a job of their own goes into `needs` of the `ci` job below.
+  # The broker tests of the design's CI matrix (section 9), KRaft (3.3, 3.9, 4.0, 4.4)
+  # and ZooKeeper with AclAuthorizer (3.0, 3.9), run in the build and jdk jobs above:
+  # each starts its cluster in the test's process in seconds.
+  # TODO(broker tests): clients of one Kafka version against brokers of another, in
+  # those jobs too unless they turn out slow; a job of their own goes into `needs` of
+  # the `ci` job below.
 
   # The single check the main ruleset requires, and the only reason this job
   # exists.

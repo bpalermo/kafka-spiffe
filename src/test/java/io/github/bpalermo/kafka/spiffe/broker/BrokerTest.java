@@ -64,16 +64,18 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * A KRaft cluster of two brokers and a controller in this process, on the Kafka version of the
- * target (design, section 9, "Kafka"): the brokers' listener and the inter-broker one are TLS
- * through {@link SpiffeSslEngineFactory} and {@link SpiffePrincipalBuilder}, before KRaft's
- * StandardAuthorizer, and every broker and client takes its SVIDs from a Workload API of its own.
+ * A cluster of two brokers in this process, on the Kafka version and mode of the target (design,
+ * section 9, "Kafka"): KRaft, with a controller, before StandardAuthorizer, or ZooKeeper, before
+ * AclAuthorizer. The brokers' listener and the inter-broker one are TLS through {@link
+ * SpiffeSslEngineFactory} and {@link SpiffePrincipalBuilder}, and every broker and client takes its
+ * SVIDs from a Workload API of its own.
  *
  * <p>The brokers are {@value #BROKER} of example.org, the clients workloads of k8s.example.org;
- * each trusts the other's trust domain through a federated bundle. The controller listens in
- * plaintext (see {@link KraftCluster}), where the brokers are {@code User:ANONYMOUS}, a super user.
+ * each trusts the other's trust domain through a federated bundle. A KRaft controller listens in
+ * plaintext (see {@link BrokerCluster}), where the brokers are {@code User:ANONYMOUS}, a super
+ * user.
  */
-class KraftBrokerTest {
+class BrokerTest {
 
   private static final String BROKER = "spiffe://example.org/broker";
   private static final String ADMIN = "spiffe://k8s.example.org/ns/ops/sa/admin";
@@ -101,7 +103,7 @@ class KraftBrokerTest {
 
   private static Path directory;
   private static FakeWorkloadApi brokerAgent;
-  private static KraftCluster cluster;
+  private static BrokerCluster cluster;
 
   private final List<AutoCloseable> closeables = new ArrayList<>();
   private int agents;
@@ -119,7 +121,7 @@ class KraftBrokerTest {
 
     Map<String, String> configs = new HashMap<>();
     configs.put(
-        "listener.security.protocol.map", KraftCluster.LISTENER + ":SSL,CONTROLLER:PLAINTEXT");
+        "listener.security.protocol.map", BrokerCluster.LISTENER + ":SSL,CONTROLLER:PLAINTEXT");
     configs.put("ssl.engine.factory.class", SpiffeSslEngineFactory.class.getName());
     configs.put("ssl.client.auth", "required");
     configs.put("principal.builder.class", SpiffePrincipalBuilder.class.getName());
@@ -131,15 +133,22 @@ class KraftBrokerTest {
     // Principals for the brokers and the service accounts; OUTSIDER gets spiffe-unauthorized.
     configs.put("spiffe.principal.allowed.ids", BROKER);
     configs.put("spiffe.principal.allowed.id.patterns", "spiffe://k8s.example.org/ns/*/sa/*");
-    configs.put("authorizer.class.name", "org.apache.kafka.metadata.authorizer.StandardAuthorizer");
-    configs.put("super.users", "Spiffe:" + BROKER + ";Spiffe:" + ADMIN + ";User:ANONYMOUS");
+    // Assigned before it starts, so that teardown stops what a failed start leaves running.
+    cluster = BrokerCluster.named();
+    String superUsers = "Spiffe:" + BROKER + ";Spiffe:" + ADMIN;
+    if (cluster.kraft()) {
+      configs.put(
+          "authorizer.class.name", "org.apache.kafka.metadata.authorizer.StandardAuthorizer");
+      configs.put("super.users", superUsers + ";User:ANONYMOUS");
+    } else {
+      configs.put("authorizer.class.name", "kafka.security.authorizer.AclAuthorizer");
+      configs.put("super.users", superUsers);
+    }
     configs.put("offsets.topic.replication.factor", "2");
     configs.put("offsets.topic.num.partitions", "2");
     configs.put("transaction.state.log.replication.factor", "2");
     configs.put("transaction.state.log.min.isr", "1");
     configs.put("group.initial.rebalance.delay.ms", "0");
-    // Assigned before it starts, so that teardown stops what a failed start leaves running.
-    cluster = KraftCluster.named();
     cluster.start(2, configs);
   }
 
@@ -163,10 +172,11 @@ class KraftBrokerTest {
   }
 
   @Test
-  void spiffePrincipalsAreAuthorizedByAclsCreatedThroughTheController() throws Exception {
+  void spiffePrincipalsAreAuthorizedByAcls() throws Exception {
     Admin admin = admin(agent(ADMIN));
-    // CreateTopics and CreateAcls are forwarded to the controller with the admin's principal,
-    // which the controller reads back through the builder's serde and finds a super user.
+    // On KRaft, CreateTopics and CreateAcls are forwarded to the controller with the admin's
+    // principal, which the controller reads back through the builder's serde and finds a super
+    // user; on ZooKeeper the broker authorizes them and writes to ZooKeeper.
     createTopic(admin, "orders");
     AclBinding write = acl(APP, ResourceType.TOPIC, "orders", AclOperation.WRITE);
     AclBinding read = acl(APP, ResourceType.TOPIC, "orders", AclOperation.READ);
@@ -200,8 +210,8 @@ class KraftBrokerTest {
         .createAcls(List.of(acl(OUTSIDER, ResourceType.TOPIC, "payments", AclOperation.WRITE)))
         .all()
         .get();
-    // The brokers apply the metadata log in order: once a later ACL lets CONTROL write to the
-    // partition each broker leads, both brokers have OUTSIDER's.
+    // The brokers apply the metadata log (or ZooKeeper's ACL change notifications) in order: once
+    // a later ACL lets CONTROL write to the partition each broker leads, both have OUTSIDER's.
     owner
         .createAcls(List.of(acl(CONTROL, ResourceType.TOPIC, "payments", AclOperation.WRITE)))
         .all()
@@ -220,7 +230,8 @@ class KraftBrokerTest {
       assertInstanceOf(TopicAuthorizationException.class, produced.getCause());
     }
 
-    // Forwarded to the controller as Spiffe:spiffe-unauthorized, which is no super user.
+    // As Spiffe:spiffe-unauthorized, which is no super user: on KRaft forwarded to the controller
+    // through the serde, on ZooKeeper refused by the broker.
     Admin admin = admin(outsider);
     ExecutionException created =
         assertThrows(
@@ -349,8 +360,7 @@ class KraftBrokerTest {
   /** The version of the kafka-clients on the class path, as it records it. */
   private static String kafkaVersion() throws IOException {
     Properties properties = new Properties();
-    try (InputStream in =
-        KraftBrokerTest.class.getResourceAsStream("/kafka/kafka-version.properties")) {
+    try (InputStream in = BrokerTest.class.getResourceAsStream("/kafka/kafka-version.properties")) {
       properties.load(in);
     }
     return properties.getProperty("version");
@@ -452,7 +462,7 @@ class KraftBrokerTest {
 
   /**
    * Sends {@code record} and waits for its acknowledgement, again while a broker has not yet heard
-   * of the ACLs that allow it: the controller has them before the brokers do.
+   * of the ACLs that allow it: the controller (or ZooKeeper) has them before the brokers do.
    */
   private static void send(
       KafkaProducer<String, String> producer, ProducerRecord<String, String> record)
