@@ -128,12 +128,21 @@ record X509SvidResponse(List<X509Svid> svids, Map<TrustDomain, X509Bundle> bundl
       throw new InvalidResponseException("a federated bundle without its trust domain or bundle");
     }
     // The agent keys federated bundles by trust domain ID (spiffe://example.org); accept the name
-    // too.
-    TrustDomain domain =
-        key.startsWith(SpiffeId.SCHEME)
-            ? SpiffeId.parse(key).trustDomain()
-            : TrustDomain.parse(key);
-    federated.put(domain, new X509Bundle(domain, certificates(value)));
+    // too. A SPIFFE ID with a path names a workload, not a trust domain, and is refused.
+    TrustDomain domain;
+    if (key.startsWith(SpiffeId.SCHEME)) {
+      SpiffeId id = SpiffeId.parse(key);
+      if (!id.isTrustDomainId()) {
+        throw new InvalidResponseException(
+            "a federated bundle keyed by " + key + ", which is not a trust domain ID");
+      }
+      domain = id.trustDomain();
+    } else {
+      domain = TrustDomain.parse(key);
+    }
+    if (federated.put(domain, new X509Bundle(domain, certificates(value))) != null) {
+      throw new InvalidResponseException("two federated bundles of " + domain);
+    }
   }
 
   /**

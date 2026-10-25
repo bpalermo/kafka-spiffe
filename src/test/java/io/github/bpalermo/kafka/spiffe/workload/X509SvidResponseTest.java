@@ -208,4 +208,24 @@ class X509SvidResponseTest {
     message.flush();
     return inner.toByteArray();
   }
+
+  @Test
+  void refusesAFederatedBundleKeyedByAWorkloadIdOrTwice() throws Exception {
+    byte[] workloadKey =
+        new FakeWorkloadApi.Response()
+            .svid(FakeWorkloadApi.Svid.of(OWN.svid("/a"), OWN))
+            .federated("spiffe://k8s.example.org/workload", List.of(FEDERATED.certificate()))
+            .encode();
+    assertThrows(
+        X509SvidResponse.InvalidResponseException.class, () -> X509SvidResponse.parse(workloadKey));
+
+    byte[] twice =
+        new FakeWorkloadApi.Response()
+            .svid(FakeWorkloadApi.Svid.of(OWN.svid("/a"), OWN))
+            .federated("spiffe://k8s.example.org", List.of(FEDERATED.certificate()))
+            .federated("k8s.example.org", List.of(TestPki.root("k8s.example.org").certificate()))
+            .encode();
+    assertThrows(
+        X509SvidResponse.InvalidResponseException.class, () -> X509SvidResponse.parse(twice));
+  }
 }
