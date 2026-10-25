@@ -145,3 +145,33 @@ java_import(
     strip_prefix = "pmd-bin-7.28.0/lib",
     url = "https://github.com/pmd/pmd/releases/download/pmd_releases/7.28.0/pmd-dist-7.28.0-bin.zip",
 )
+
+# --- Kafka distributions ---------------------------------------------------------
+# A broker's libs/, for the test of the published jar beside them (design §9, "The
+# jar"): the oldest and the newest version of the matrix. Test-only, and fetched only
+# by those targets, which are `manual` (CI runs them in the `jar` job). The sha256 is
+# of the archive whose sha512 matched the one Apache publishes beside it.
+# Bump = new version in the URL and prefix + new sha256.
+[
+    http_archive(
+        name = "kafka_dist_" + line,
+        # The jars are also exported one by one, so a test can name one of them to find
+        # the directory.
+        build_file_content = """\
+exports_files(glob(["libs/*.jar"]))
+
+filegroup(
+    name = "libs",
+    srcs = glob(["libs/*.jar"]),
+    visibility = ["//visibility:public"],
+)
+""",
+        sha256 = sha256,
+        strip_prefix = "kafka_2.13-" + version,
+        urls = ["https://archive.apache.org/dist/kafka/%s/kafka_2.13-%s.tgz" % (version, version)],
+    )
+    for line, version, sha256 in [
+        ("3_0", "3.0.2", "1bc6fa4931a5c28c3e883a8c09e6641771d329df784ca71c9b27d9ec04ffef21"),
+        ("4_4", "4.4.0", "5d46df16e8dbd228fed83c3e6fc4306916cf3d9156184a7fc2462e9ad9711a7d"),
+    ]
+]
