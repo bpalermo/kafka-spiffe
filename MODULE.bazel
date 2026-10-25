@@ -78,11 +78,12 @@ maven.install(
 # One repository per Kafka version the tests run against (design §9), so the tests
 # of one version never see another's jars. Each has its own lockfile. A repository
 # holds the version's kafka-clients; from 3.3 (the first with KRaft in production)
-# kafka-metadata for StandardAuthorizer, and the broker and its test cluster for the
-# KRaft broker tests (design §9, "In-process test clusters"). JUnit and Netty (which
-# ZooKeeper brings to 3.x) are left out of them: the tests run on the main repository's
-# JUnit, which Kafka's test clusters only call for assertions, and the fake Workload
-# API on its Netty, which a KRaft broker does not use.
+# kafka-metadata for StandardAuthorizer; and the broker and its test cluster for the
+# broker tests (design §9, "In-process test clusters"): 3.0's for ZooKeeper, 3.3's to
+# 4.4's for KRaft, 3.9's for both. JUnit and Netty (which ZooKeeper brings to 3.x) are
+# left out of them: the tests run on the main repository's JUnit, which Kafka's test
+# clusters only call for assertions, and the fake Workload API on its Netty, which a
+# broker does not use (ZooKeeper and its clients default to NIO).
 # Re-pin one: `REPIN=1 bazel run @kafka_3_3//:pin`.
 #
 # Versions are the latest patch release of each line in the matrix.
@@ -120,7 +121,16 @@ KAFKA_EXCLUDED = [
         strict_visibility = True,
     )
     for line, version, extra in [
-        ("3_0", "3.0.2", []),
+        (
+            "3_0",
+            "3.0.2",
+            [
+                "org.apache.kafka:kafka_2.13:{v}",
+                "org.apache.kafka:kafka_2.13:jar:test:{v}",
+                "org.apache.kafka:kafka-clients:jar:test:{v}",
+                "org.apache.kafka:kafka-server-common:jar:test:{v}",
+            ],
+        ),
         (
             "3_3",
             "3.3.2",

@@ -5,13 +5,13 @@ import kafka.testkit.BrokerNodes;
 import kafka.testkit.KafkaClusterTestKit;
 import kafka.testkit.TestKitNodes;
 
-/** A {@link KraftCluster} on Kafka 3.3's test kit. */
-public final class Kraft33 implements KraftCluster {
+/** A {@link BrokerCluster} on Kafka 3.3's test kit. */
+public final class Kraft33 implements BrokerCluster {
 
   private KafkaClusterTestKit cluster;
 
   @Override
-  public KraftCluster start(int brokers, Map<String, String> configs) throws Exception {
+  public BrokerCluster start(int brokers, Map<String, String> configs) throws Exception {
     TestKitNodes.Builder nodes = new TestKitNodes.Builder().setNumControllerNodes(1);
     for (int id = 0; id < brokers; id++) {
       // The kit would replace the listener settings of configs; a broker's overrides win.
@@ -24,6 +24,11 @@ public final class Kraft33 implements KraftCluster {
     cluster.startup();
     cluster.waitForReadyBrokers();
     return this;
+  }
+
+  @Override
+  public boolean kraft() {
+    return true;
   }
 
   @Override
