@@ -134,21 +134,36 @@ jobs:
           set -euo pipefail
           token="$(printf '%s:%s' "${MAVEN_USER}" "${MAVEN_PASSWORD}" | base64 -w0)"
           auth="Authorization: Bearer ${token}"
+          purl="pkg:maven/io.github.bpalermo/kafka-spiffe@${RELEASE_VERSION}"
+          # The namespace's Portal deployments, as the staging API knows them.
+          deployments() {
+            curl --fail-with-body -sS -H "${auth}" \
+              "${STAGING}/manual/search/repositories?ip=any&profile_id=io.github.bpalermo" |
+              jq -r '.repositories[].portal_deployment_id // empty'
+          }
+          status() {
+            curl --fail-with-body -sS -X POST -H "${auth}" "${PORTAL}/api/v1/publisher/status?id=$1"
+          }
+
+          # Those of earlier attempts, so that a release run again follows its own.
+          for attempt in 1 2 3 4 5; do
+            before="$(deployments)" && break
+            [ "${attempt}" = 5 ] && exit 1
+            sleep 10
+          done
           curl --fail-with-body -sS -X POST -H "${auth}" \
             "${STAGING}/manual/upload/defaultRepository/io.github.bpalermo?publishing_type=automatic"
           echo
 
-          # The deployment is the one of the namespace's whose purl is this version.
-          purl="pkg:maven/io.github.bpalermo/kafka-spiffe@${RELEASE_VERSION}"
-          status() {
-            curl --fail-with-body -sS -X POST -H "${auth}" "${PORTAL}/api/v1/publisher/status?id=$1"
-          }
+          # A read that fails (a 429, a 5xx, a reset connection) is tried again: the
+          # Portal goes on publishing whether or not this job is watching.
           deployment=""
           for _ in $(seq 1 30); do
-            for id in $(curl --fail-with-body -sS -H "${auth}" \
-              "${STAGING}/manual/search/repositories?ip=any&profile_id=io.github.bpalermo" |
-              jq -r '.repositories[].portal_deployment_id // empty'); do
-              if status "${id}" | jq -e --arg purl "${purl}" '(.purls // []) | index($purl)' >/dev/null; then
+            for id in $(deployments || true); do
+              if grep -qxF "${id}" <<<"${before}"; then
+                continue
+              fi
+              if (status "${id}" || true) | jq -e --arg purl "${purl}" '(.purls // []) | index($purl)' >/dev/null 2>&1; then
                 deployment="${id}"
               fi
             done
@@ -156,14 +171,18 @@ jobs:
             sleep 10
           done
           if [ -z "${deployment}" ]; then
-            echo "::error::no Portal deployment holds ${purl}" >&2
+            echo "::error::no new Portal deployment holds ${purl}" >&2
             exit 1
           fi
           echo "Portal deployment ${deployment}"
 
           # Publishing takes minutes, sometimes tens of them.
           for _ in $(seq 1 120); do
-            answer="$(status "${deployment}")"
+            if ! answer="$(status "${deployment}")"; then
+              echo "$(date -u +%H:%M:%S) status not read; trying again"
+              sleep 30
+              continue
+            fi
             state="$(jq -r .deploymentState <<<"${answer}")"
             echo "$(date -u +%H:%M:%S) ${state}"
             case "${state}" in
