@@ -2,56 +2,56 @@ load("//bazel/java:defs.bzl", "JAVACOPTS")
 load("//bazel/java:junit.bzl", "java_junit_test")
 load("//bazel/java:kafka.bzl", "KAFKA_VERSIONS", "kafka_version_test")
 
-# Against kafka-clients 3.0.0, the floor the library is compiled against. The same
-# tests on each Kafka version of the design's matrix come with the broker tests.
+DEPS = [
+    "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
+    "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+    "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
+    "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
+    "//src/test/java/io/github/bpalermo/kafka/spiffe/testing",
+    "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+    "@maven//:io_netty_netty_transport_classes_epoll",
+]
+
+# The tests that use only Kafka's public API (and the internal classes the principal
+# builder relies on, which are the same from 3.0 to 4.4), so they run against every
+# version's jars.
+PORTABLE = [
+    "SpiffeConfigTest",
+    "SpiffePrincipalBuilderTest",
+    "SpiffeSslEngineFactoryTest",
+]
+
+PORTABLE_SRCS = [c + ".java" for c in PORTABLE] + ["TlsPeers.java"]
+
+# Against kafka-clients 3.0.0, the floor the library is compiled against.
+# KafkaSslFactoryTest uses 3.0's internal SslFactory.
 java_junit_test(
     name = "kafka_test",
     size = "medium",
-    srcs = glob(["*.java"]),
+    srcs = PORTABLE_SRCS + ["KafkaSslFactoryTest.java"],
     javacopts = JAVACOPTS,
-    test_classes = [
-        "io.github.bpalermo.kafka.spiffe.kafka.KafkaSslFactoryTest",
-        "io.github.bpalermo.kafka.spiffe.kafka.SpiffeConfigTest",
-        "io.github.bpalermo.kafka.spiffe.kafka.SpiffeSslEngineFactoryTest",
-    ],
+    test_classes = ["io.github.bpalermo.kafka.spiffe.kafka." + c for c in PORTABLE + ["KafkaSslFactoryTest"]],
     runtime_deps = [
         "@maven//:org_apache_kafka_kafka_clients",
         "@maven//:org_slf4j_slf4j_api",
     ],
-    deps = [
+    deps = DEPS + [
         "//bazel/maven:kafka_clients_provided",
-        "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
-        "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
-        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
-        "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
-        "@maven//:io_netty_netty_transport_classes_epoll",
         "@maven//:org_junit_jupiter_junit_jupiter_api",
     ],
 )
 
-# The configuration and engine-pair tests on each Kafka version of the matrix
-# (kafka_3_0_test ... kafka_4_4_test): they use only Kafka's public API, so they run
-# against every version's jars. KafkaSslFactoryTest uses 3.0's internal SslFactory.
+# The portable tests on each Kafka version of the matrix (kafka_3_0_test ...
+# kafka_4_4_test) and, from 3.3, the principals before KRaft's StandardAuthorizer
+# (kafka-metadata, which 3.0 does not have).
 [
     kafka_version_test(
         size = "medium",
-        srcs = [
-            "SpiffeConfigTest.java",
-            "SpiffeSslEngineFactoryTest.java",
-        ],
+        srcs = PORTABLE_SRCS + ([] if repo == "kafka_3_0" else ["StandardAuthorizerTest.java"]),
         repo = repo,
-        test_classes = [
-            "io.github.bpalermo.kafka.spiffe.kafka.SpiffeConfigTest",
-            "io.github.bpalermo.kafka.spiffe.kafka.SpiffeSslEngineFactoryTest",
-        ],
+        test_classes = ["io.github.bpalermo.kafka.spiffe.kafka." + c for c in PORTABLE + ([] if repo == "kafka_3_0" else ["StandardAuthorizerTest"])],
         version = version,
-        deps = [
-            "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
-            "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
-            "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
-            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
-            "@maven//:io_netty_netty_transport_classes_epoll",
-        ],
+        deps = DEPS + ([] if repo == "kafka_3_0" else ["@%s//:org_apache_kafka_kafka_metadata" % repo]),
     )
     for repo, version in KAFKA_VERSIONS.items()
 ]
