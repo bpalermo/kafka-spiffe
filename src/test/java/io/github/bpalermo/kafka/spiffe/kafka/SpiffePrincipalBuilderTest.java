@@ -183,6 +183,23 @@ class SpiffePrincipalBuilderTest {
   }
 
   @Test
+  void aCachedPolicyNeverStandsInForAConfigurationThatPrintsTheSame() {
+    Map<String, Object> list = configs();
+    list.put("spiffe.principal.allowed.ids", List.of("spiffe://k8s.example.org/ns/a/sa/b"));
+    builder(list);
+    Map<String, Object> string = configs();
+    string.put("spiffe.principal.allowed.ids", "[spiffe://k8s.example.org/ns/a/sa/b]");
+    assertThrows(ConfigException.class, () -> builder(string));
+
+    Map<String, Object> listener = configs();
+    listener.put("spiffe.principal.listener.mtls.allowed.ids", List.of("spiffe://example.org/a"));
+    builder(listener);
+    Map<String, Object> printed = configs();
+    printed.put("spiffe.principal.listener.mtls.allowed.ids", "[spiffe://example.org/a]");
+    assertThrows(ConfigException.class, () -> builder(printed));
+  }
+
+  @Test
   void badPrincipalSettingsAreConfigurationErrors() {
     Map<String, Object> type = configs();
     type.put("spiffe.principal.type", "Spiffe:x");

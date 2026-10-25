@@ -5,6 +5,8 @@ import io.github.bpalermo.kafka.spiffe.x509.SvidLeaf;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -219,7 +221,7 @@ public final class SpiffePrincipalBuilder
     }
   }
 
-  /** The keys a policy is made of, so equal configurations share it. */
+  /** The keys a policy is made of, as given, so equal configurations share it. */
   private static Map<String, Object> relevant(Map<String, ?> configs) {
     Map<String, Object> key = new TreeMap<>();
     configs.forEach(
@@ -228,7 +230,13 @@ public final class SpiffePrincipalBuilder
               || name.contains("." + SpiffeConfig.PREFIX)
               || name.equals(PrincipalPolicy.SSL_PRINCIPAL_MAPPING_RULES)
               || name.equals(PrincipalPolicy.ALLOW_EVERYONE_IF_NO_ACL_FOUND)) {
-            key.put(name, value == null ? null : value.toString());
+            // Typed, and lists copied: a list and the string that prints like it are not the same
+            // configuration, and only one of them is valid.
+            key.put(
+                name,
+                value instanceof List<?> list
+                    ? Collections.unmodifiableList(new ArrayList<>(list))
+                    : value);
           }
         });
     return key;
