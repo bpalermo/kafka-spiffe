@@ -88,9 +88,11 @@ jobs:
   # workflow tests those two secrets without publishing.
   #
   # The upload goes to the Portal's staging-compatible endpoint. A deployment
-  # made there reaches the Portal only when this job asks for it (the last
-  # step), and with publishing_type=user_managed it waits there, validated, for
-  # someone to press Publish.
+  # made there reaches the Portal only when this job asks for it, and with
+  # publishing_type=automatic the Portal publishes it once it validates. The job
+  # then follows the deployment until it is published, so a validation that
+  # fails fails the release. A version on Central cannot be removed or replaced:
+  # what verify passed is what is published.
   maven:
     if: vars.PUBLISH_MAVEN == 'true'
     needs: [plan, verify]
@@ -123,18 +125,80 @@ jobs:
         run: bazel run --config=ci //:kafka-spiffe.publish
       # The staging API keeps an upload under the token, the namespace and the
       # runner's address, so this runs in the same job as the upload.
-      - name: Hand the deployment to the Portal
+      - name: Hand the deployment to the Portal, and follow it until published
         env:
           MAVEN_USER: ${{ secrets.MAVEN_USER }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          PORTAL: https://central.sonatype.com
         run: |
           set -euo pipefail
           token="$(printf '%s:%s' "${MAVEN_USER}" "${MAVEN_PASSWORD}" | base64 -w0)"
-          curl --fail-with-body -sS -X POST \
-            -H "Authorization: Bearer ${token}" \
-            "${STAGING}/manual/upload/defaultRepository/io.github.bpalermo?publishing_type=user_managed"
+          auth="Authorization: Bearer ${token}"
+          purl="pkg:maven/io.github.bpalermo/kafka-spiffe@${RELEASE_VERSION}"
+          # The namespace's Portal deployments, as the staging API knows them.
+          deployments() {
+            curl --fail-with-body -sS -H "${auth}" \
+              "${STAGING}/manual/search/repositories?ip=any&profile_id=io.github.bpalermo" |
+              jq -r '.repositories[].portal_deployment_id // empty'
+          }
+          status() {
+            curl --fail-with-body -sS -X POST -H "${auth}" "${PORTAL}/api/v1/publisher/status?id=$1"
+          }
+
+          # Those of earlier attempts, so that a release run again follows its own.
+          for attempt in 1 2 3 4 5; do
+            before="$(deployments)" && break
+            [ "${attempt}" = 5 ] && exit 1
+            sleep 10
+          done
+          curl --fail-with-body -sS -X POST -H "${auth}" \
+            "${STAGING}/manual/upload/defaultRepository/io.github.bpalermo?publishing_type=automatic"
           echo
-          echo "kafka-spiffe ${RELEASE_VERSION} is in the Central Portal, waiting to be published."
+
+          # A read that fails (a 429, a 5xx, a reset connection) is tried again: the
+          # Portal goes on publishing whether or not this job is watching.
+          deployment=""
+          for _ in $(seq 1 30); do
+            for id in $(deployments || true); do
+              if grep -qxF "${id}" <<<"${before}"; then
+                continue
+              fi
+              if (status "${id}" || true) | jq -e --arg purl "${purl}" '(.purls // []) | index($purl)' >/dev/null 2>&1; then
+                deployment="${id}"
+              fi
+            done
+            [ -n "${deployment}" ] && break
+            sleep 10
+          done
+          if [ -z "${deployment}" ]; then
+            echo "::error::no new Portal deployment holds ${purl}" >&2
+            exit 1
+          fi
+          echo "Portal deployment ${deployment}"
+
+          # Publishing takes minutes, sometimes tens of them.
+          for _ in $(seq 1 120); do
+            if ! answer="$(status "${deployment}")"; then
+              echo "$(date -u +%H:%M:%S) status not read; trying again"
+              sleep 30
+              continue
+            fi
+            state="$(jq -r .deploymentState <<<"${answer}")"
+            echo "$(date -u +%H:%M:%S) ${state}"
+            case "${state}" in
+              PUBLISHED)
+                echo "kafka-spiffe ${RELEASE_VERSION} is published to Maven Central."
+                exit 0
+                ;;
+              FAILED)
+                echo "::error::the Portal refused the deployment: $(jq -c '.errors // {}' <<<"${answer}")" >&2
+                exit 1
+                ;;
+            esac
+            sleep 30
+          done
+          echo "::error::deployment ${deployment} was not published within an hour; see the Central Portal" >&2
+          exit 1
 
   # The GitHub release: the jar and its POM, each with a cosign signature
   # (keyless, from this workflow's identity), and notes generated from the pull
