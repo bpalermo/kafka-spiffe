@@ -92,6 +92,18 @@ final class PeerVerification implements SpiffeTrustManager.Observer {
     }
   }
 
+  /**
+   * The counts of {@code domain} (null or empty for none), the same a factory configured with that
+   * domain counts in, whether or not one holds them: for reading, so nothing is registered.
+   */
+  static PeerVerification of(String domain) {
+    String named = domain == null || domain.isEmpty() ? null : domain;
+    synchronized (BY_DOMAIN) {
+      return BY_DOMAIN.computeIfAbsent(
+          named == null ? "" : named, d -> new PeerVerification(named));
+    }
+  }
+
   /** Gives back what {@link #acquire} gave; the last release unregisters the MBeans. */
   void release() {
     synchronized (BY_DOMAIN) {

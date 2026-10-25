@@ -12,6 +12,7 @@ import io.github.bpalermo.kafka.spiffe.testing.Handshake;
 import io.github.bpalermo.kafka.spiffe.testing.TestPki;
 import io.github.bpalermo.kafka.spiffe.workload.X509MaterialSource;
 import io.github.bpalermo.kafka.spiffe.workload.X509SourceRegistry;
+import io.github.bpalermo.kafka.spiffe.x509.PeerRejectedException;
 import io.netty.channel.epoll.Epoll;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -428,6 +429,39 @@ class SpiffeSslEngineFactoryTest {
   }
 
   @Test
+  void withTheMBeansOffHandshakesAreCountedAllTheSame() throws Exception {
+    Map<String, Object> client = clientConfigs();
+    client.put("spiffe.metrics.jmx.enabled", "false");
+    Map<String, Object> broker = brokerConfigs();
+    broker.put("spiffe.metrics.jmx.enabled", "false");
+    Map<String, Object> strict = brokerConfigs();
+    strict.remove("spiffe.peer.allowed.trust.domains");
+    strict.put("spiffe.metrics.jmx.enabled", "false");
+    // Read before any factory of the domain exists: the view is of the counts the factories use.
+    PeerVerificationStats stats = PeerVerificationStats.of(null);
+    long serverAccepted = stats.server().accepted();
+    long serverRefused = stats.server().rejected().get(PeerRejectedException.Reason.ID_NOT_ALLOWED);
+    long clientAccepted = stats.client().accepted();
+    SpiffeSslEngineFactory clientFactory = factory(client);
+    SpiffeSslEngineFactory brokerFactory = factory(broker);
+    SpiffeSslEngineFactory strictFactory = factory(strict);
+
+    connect(clientFactory, brokerFactory);
+    assertThrows(SSLException.class, () -> connect(clientFactory, strictFactory));
+
+    assertEquals(serverAccepted + 1, stats.server().accepted());
+    assertEquals(
+        serverRefused + 1,
+        stats.server().rejected().get(PeerRejectedException.Reason.ID_NOT_ALLOWED));
+    assertEquals(clientAccepted + 2, stats.client().accepted());
+    assertFalse(
+        java.lang.management.ManagementFactory.getPlatformMBeanServer()
+            .queryNames(new javax.management.ObjectName("*:type=peer-verification,*"), null)
+            .stream()
+            .anyMatch(name -> name.getDomain().isEmpty() || "null".equals(name.getDomain())));
+  }
+
+  @Test
   void handshakesAreCountedInThePeerVerificationMBeans() throws Exception {
     // A JMX domain of this test's own: the counts are the process's, per domain.
     String domain = "test.peer.verification";
@@ -459,6 +493,14 @@ class SpiffeSslEngineFactoryTest {
     // The client verified both brokers before the strict one refused it.
     assertEquals(2L, server.getAttribute(asClient, "accepted-total"));
     assertEquals(0L, server.getAttribute(asClient, "rejected-total"));
+    // The same numbers without JMX.
+    PeerVerificationStats stats = PeerVerificationStats.of(domain);
+    assertEquals(1, stats.server().accepted());
+    assertEquals(1, stats.server().rejectedTotal());
+    assertEquals(1, stats.server().rejected().get(PeerRejectedException.Reason.ID_NOT_ALLOWED));
+    assertEquals(0, stats.server().rejected().get(PeerRejectedException.Reason.CHAIN));
+    assertEquals(2, stats.client().accepted());
+    assertEquals(0, stats.client().rejectedTotal());
 
     // Registered while a factory of the domain is open.
     clientFactory.close();

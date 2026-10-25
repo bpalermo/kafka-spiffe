@@ -53,6 +53,8 @@ import javax.net.ssl.X509ExtendedTrustManager;
  * <p>{@link #getAcceptedIssuers()} is empty: a server asks for a client certificate without naming
  * authorities, so a client whose SVID is issued by an intermediate the server does not hold still
  * presents it. Which authorities are accepted is decided per trust domain, here, not by the client.
+ *
+ * <p>Public API (design, section 3).
  */
 public final class SpiffeTrustManager extends X509ExtendedTrustManager {
 
@@ -71,6 +73,11 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   /**
    * What a handshake's verification of its peer came to, for metrics and logs. Called on the
    * handshake's thread, so it must be quick and must not throw.
+   *
+   * <p>Public API (design, section 3): an application that makes its own contexts with {@link
+   * SnapshotSslContext#create(X509Context, SpiffeIdMatcher, SnapshotSslContext.Settings,
+   * java.time.Clock, Observer)} counts their verifications with one. The engine factory's own are
+   * counted by {@code PeerVerificationStats}.
    */
   public interface Observer {
     /** Counts nothing. */

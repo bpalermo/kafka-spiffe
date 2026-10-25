@@ -2,7 +2,11 @@ package io.github.bpalermo.kafka.spiffe.x509;
 
 import java.security.cert.CertificateException;
 
-/** A peer's certificate chain that {@link SpiffeTrustManager} refused, and the kind of reason. */
+/**
+ * A peer's certificate chain that {@link SpiffeTrustManager} refused, and the kind of reason.
+ *
+ * <p>Public API (design, section 3).
+ */
 public final class PeerRejectedException extends CertificateException {
   private static final long serialVersionUID = 1L;
 
