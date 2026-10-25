@@ -126,7 +126,8 @@ Most users only name the two Kafka entry points in their configuration. An appli
 |---|---|
 | `kafka` | `SpiffeSslEngineFactory` and `SpiffePrincipalBuilder` (the Kafka entry points); `SpiffeConfig`: the keys, `parse`, and `acquireSource()`, a handle on the source a factory configured with the same keys uses |
 | `workload` | `X509SourceRegistry` (`shared(domain)`, `acquire(settings)`); `X509MaterialSource`, with `current()`, `awaitFirst`, listeners and `stats()` (connected, updates, rejected updates, stream errors, last update: what the source's MBean shows, without JMX); `X509Source`, its `Settings` and `Identity` |
-| `x509` | `X509Context`, `X509Svid`, `BundleSet`, `X509Bundle`; `SnapshotSslContext`, which makes a JDK `SSLContext` of a snapshot that verifies peers by SPIFFE ID |
+| `kafka` (counts) | `PeerVerificationStats`: the factories' peer counts by side and reason, without JMX (§7) |
+| `x509` | `X509Context`, `X509Svid`, `BundleSet`, `X509Bundle`; `SnapshotSslContext`, which makes a JDK `SSLContext` of a snapshot that verifies peers by SPIFFE ID; `SpiffeTrustManager` and its `Observer`, told each handshake's verdict; `PeerRejectedException` and its `Reason` |
 | `id` | `SpiffeId`, `TrustDomain`, `SpiffeIdMatcher` |
 
 The factory takes its source from `X509SourceRegistry.shared(domain)`, where the domain is `spiffe.metrics.jmx.domain`, or null with `spiffe.metrics.jmx.enabled=false`. Settings of the same identity acquired from the registry of the same domain share the factory's source; `SpiffeConfig.acquireSource()` does both from the factory's keys. Everything else is internal and may change in any release: `workload.h2`, the wire reader, `SvidValidator` and the other classes that are public only because another package of the library calls them.
@@ -301,6 +302,8 @@ JMX MBeans, which the Prometheus JMX exporter on a broker picks up:
 
 - `kafka.spiffe:type=x509-source,socket=<path>`: `connected`, `updates-total`, `updates-rejected-total`, `stream-errors-total`, `last-update-timestamp-ms`, `svid-expiry-timestamp-ms`, `svid-ttl-remaining-ms`, `bundle-count`, `bundle-trust-domains`.
 - `kafka.spiffe:type=peer-verification,mode=server|client`: `accepted-total`, `rejected-total`, and one `rejected-<reason>-total` per reason (`malformed-svid`, `unknown-trust-domain`, `chain`, `id-not-allowed`). `mode` is the side this process took in the handshake. The counts are the process's, per JMX domain, and kept for its life; the MBeans are registered while a factory of the domain is open. The trust manager reports each handshake's verdict to an observer, so `verify` called outside a handshake counts nothing.
+
+Both sets of numbers are also readable without JMX, for an application that exports its own metrics, or runs where JMX is not available: `X509MaterialSource.stats()` for a source, and `PeerVerificationStats.of(domain)` for the peer counts of the factories of a JMX domain (null with `spiffe.metrics.jmx.enabled=false`, which counts all the same and registers nothing). An application that makes its own contexts with `SnapshotSslContext` counts their verifications with its own `SpiffeTrustManager.Observer`.
 
 Logs go through slf4j, which Kafka provides: SPIFFE IDs, trust domains, expiry times, socket paths; never keys. Rejected peers are logged at a limited rate (ten lines a minute, then a count of those dropped), with the reason and the peer's ID.
 

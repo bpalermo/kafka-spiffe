@@ -262,6 +262,12 @@ The Prometheus JMX exporter on a broker picks the MBeans up with `includeObjectN
 - `updates-rejected-total` increasing.
 - `rejected-total` of `mode=server` increasing: workloads trying to connect that the allow-list or the bundles do not let in.
 
+### Without JMX
+
+An application that exports its own metrics, or runs where JMX is not available, reads the same numbers from the library, with `spiffe.metrics.jmx.enabled=false` if it wants no MBeans at all:
+- **A source:** `stats()` of the handle `SpiffeConfig.acquireSource()` returns (connected, updates, rejected updates, stream errors, last update), and `current().expiresAt()` for the SVID's expiry.
+- **Peers:** `PeerVerificationStats.of(config.jmxDomain())`, whose `server()` and `client()` give the accepted count and the refused counts by reason. Factories with the MBeans off count all the same, under the domain `null`.
+
 ### Logs
 
 Logs go through slf4j, so Kafka's logging configuration applies; the loggers are under `io.github.bpalermo.kafka.spiffe`. They name SPIFFE IDs, trust domains, socket paths and expiry times, never keys:
