@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneOffset;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -79,6 +80,39 @@ class X509SourceRegistryTest {
           Thread.sleep(10);
         }
         assertEquals(2, handle.stats().updates());
+      }
+    } finally {
+      Files.deleteIfExists(directory);
+    }
+  }
+
+  @Test
+  void closingAHandleRemovesItsListenersFromTheSharedSource() throws Exception {
+    Assumptions.assumeTrue(Epoll.isAvailable(), "the fake Workload API needs Netty's epoll");
+    Path directory = Files.createTempDirectory(Path.of("/tmp"), "ls");
+    try (FakeWorkloadApi api = FakeWorkloadApi.start(directory.resolve("agent.sock"))) {
+      api.publish(
+          new FakeWorkloadApi.Response().svid(FakeWorkloadApi.Svid.of(OWN.svid("/a"), OWN)));
+      X509SourceRegistry registry =
+          new X509SourceRegistry(Clock.fixed(TestPki.NOW, ZoneOffset.UTC));
+      X509Source.Settings settings = X509Source.Settings.of(api.socket());
+      try (X509MaterialSource kept = registry.acquire(settings)) {
+        kept.awaitFirst(Duration.ofSeconds(10));
+        AtomicInteger closedSees = new AtomicInteger();
+        AtomicInteger keptSees = new AtomicInteger();
+        kept.addListener(context -> keptSees.incrementAndGet());
+        X509MaterialSource closed = registry.acquire(settings);
+        closed.addListener(context -> closedSees.incrementAndGet());
+        closed.close();
+
+        api.publish(
+            new FakeWorkloadApi.Response().svid(FakeWorkloadApi.Svid.of(OWN.svid("/b"), OWN)));
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (keptSees.get() == 0 && System.nanoTime() < deadline) {
+          Thread.sleep(10);
+        }
+        assertEquals(1, keptSees.get());
+        assertEquals(0, closedSees.get());
       }
     } finally {
       Files.deleteIfExists(directory);

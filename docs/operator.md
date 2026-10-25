@@ -103,17 +103,17 @@ An application whose other servers or clients need the SVIDs and bundles its Kaf
 
 ```java
 SpiffeConfig config = SpiffeConfig.parse(kafkaClientConfig, System.getenv());
-try (X509MaterialSource source = config.acquireSource()) {
-  X509Context first = source.awaitFirst(Duration.ofMinutes(1));
-  SSLContext tls =
-      SnapshotSslContext.create(
-          first, config.peers(), new SnapshotSslContext.Settings("TLSv1.3", null), Clock.systemUTC());
-  source.addListener(next -> { /* a new snapshot: build the next SSLContext */ });
-  X509MaterialSource.Stats stats = source.stats(); // connected, updates, rejected, stream errors
-}
+X509MaterialSource source = config.acquireSource(); // closed when the application stops
+source.awaitFirst(Duration.ofMinutes(1));
+SnapshotSslContext.Settings tls = new SnapshotSslContext.Settings("TLSv1.3", null);
+
+// For each new connection: the newest snapshot, so a rotation is never missed.
+SSLContext context =
+    SnapshotSslContext.create(source.current(), config.peers(), tls, Clock.systemUTC());
+X509MaterialSource.Stats stats = source.stats(); // connected, updates, rejected, stream errors
 ```
 
-`acquireSource()` returns a handle on the source an engine factory configured with the same `spiffe.*` keys uses, so the two share one stream and see the same snapshots. Close the handle when done. These types are the library's public API (design, section 3).
+`acquireSource()` returns a handle on the source an engine factory configured with the same `spiffe.*` keys uses, so the two share one stream and see the same snapshots. Reading `current()` when a connection is made, as the engine factory does, needs nothing else; an application that would rather be told of each new snapshot adds a listener and then reads `current()` once, since a listener is not called with the snapshot already there. Closing the handle removes its listeners. These types are the library's public API (design, section 3).
 
 ## Principals and ACLs
 

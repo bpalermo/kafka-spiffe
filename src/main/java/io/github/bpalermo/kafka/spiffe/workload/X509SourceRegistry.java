@@ -5,7 +5,9 @@ import io.github.bpalermo.kafka.spiffe.x509.X509Context;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import javax.management.JMException;
@@ -129,6 +131,7 @@ public final class X509SourceRegistry {
   private final class Handle implements X509MaterialSource {
     private final Entry entry;
     private final X509Source.Identity identity;
+    private final List<Consumer<X509Context>> listeners = new CopyOnWriteArrayList<>();
     private boolean released;
 
     Handle(Entry entry, X509Source.Identity identity) {
@@ -146,13 +149,16 @@ public final class X509SourceRegistry {
       return entry.source.awaitFirst(timeout);
     }
 
+    /** Until removed, or until this handle is closed: the source may outlive it. */
     @Override
     public void addListener(Consumer<X509Context> listener) {
+      listeners.add(listener);
       entry.source.addListener(listener);
     }
 
     @Override
     public void removeListener(Consumer<X509Context> listener) {
+      listeners.remove(listener);
       entry.source.removeListener(listener);
     }
 
@@ -169,6 +175,8 @@ public final class X509SourceRegistry {
         }
         released = true;
       }
+      listeners.forEach(entry.source::removeListener);
+      listeners.clear();
       release(entry, identity);
     }
   }

@@ -53,7 +53,11 @@ public interface X509MaterialSource extends AutoCloseable {
    */
   X509Context awaitFirst(Duration timeout) throws TimeoutException, InterruptedException;
 
-  /** Calls {@code listener} with every new snapshot, on the source's thread, until removed. */
+  /**
+   * Calls {@code listener} with every new snapshot, on the source's thread, until removed or, for a
+   * handle from {@link X509SourceRegistry}, until the handle is closed. It is not called with the
+   * current snapshot: read {@link #current()} after adding it, or a rotation in between is missed.
+   */
   void addListener(Consumer<X509Context> listener);
 
   void removeListener(Consumer<X509Context> listener);
