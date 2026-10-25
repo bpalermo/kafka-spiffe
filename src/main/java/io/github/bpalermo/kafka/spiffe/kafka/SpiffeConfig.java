@@ -170,13 +170,13 @@ public final class SpiffeConfig {
               "The JMX domain of the MBeans");
 
   private final Map<String, Object> values;
-  private final Map<String, String> principalListenerKeys;
+  private final Map<String, Object> principalListenerKeys;
   private final X509Source.Settings source;
   private final SpiffeIdMatcher peers;
 
   private SpiffeConfig(
       Map<String, Object> values,
-      Map<String, String> principalListenerKeys,
+      Map<String, Object> principalListenerKeys,
       X509Source.Settings source,
       SpiffeIdMatcher peers) {
     this.values = values;
@@ -193,7 +193,7 @@ public final class SpiffeConfig {
    */
   public static SpiffeConfig parse(Map<String, ?> configs, Map<String, String> environment) {
     Map<String, Object> spiffe = new HashMap<>();
-    Map<String, String> listenerKeys = new HashMap<>();
+    Map<String, Object> listenerKeys = new HashMap<>();
     for (Map.Entry<String, ?> entry : configs.entrySet()) {
       String key = entry.getKey();
       if (LISTENER_PREFIXED.matcher(key).matches()) {
@@ -209,7 +209,7 @@ public final class SpiffeConfig {
         continue;
       }
       if (PRINCIPAL_LISTENER_KEY.matcher(key).matches()) {
-        listenerKeys.put(key, entry.getValue() == null ? "" : entry.getValue().toString());
+        listenerKeys.put(key, entry.getValue() == null ? "" : entry.getValue());
       } else if (DEFINITION.names().contains(key)) {
         spiffe.put(key, entry.getValue());
       } else {
@@ -308,8 +308,11 @@ public final class SpiffeConfig {
     return values.get(key);
   }
 
-  /** The {@code spiffe.principal.listener.<listener>.*} keys as they were given. */
-  public Map<String, String> principalListenerKeys() {
+  /**
+   * The {@code spiffe.principal.listener.<listener>.*} keys as they were given: a string, or a list
+   * when Kafka or the caller parsed it.
+   */
+  public Map<String, Object> principalListenerKeys() {
     return principalListenerKeys;
   }
 

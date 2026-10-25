@@ -180,7 +180,7 @@ final class PrincipalPolicy {
 
   /** The per-listener allow-lists, by lowercased listener name. */
   private static Map<String, SpiffeIdMatcher> listeners(SpiffeConfig config) {
-    Map<String, Map<String, String>> byListener = new TreeMap<>();
+    Map<String, Map<String, Object>> byListener = new TreeMap<>();
     Map<String, String> spelled = new HashMap<>();
     config
         .principalListenerKeys()
@@ -242,7 +242,7 @@ final class PrincipalPolicy {
   }
 
   @SuppressWarnings("unchecked")
-  private static List<String> parseList(String value) {
+  private static List<String> parseList(Object value) {
     if (value == null) {
       return List.of();
     }

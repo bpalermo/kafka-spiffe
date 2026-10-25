@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.InetAddress;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.net.ssl.SSLSession;
@@ -104,6 +105,17 @@ class SpiffePrincipalBuilderTest {
     assertEquals("spiffe-unauthorized", principal(configs, "INTERNAL", "/ns/a/sa/b").getName());
     assertEquals(
         "spiffe://k8s.example.org/ns/a/sa/b", principal(configs, "MTLS", "/ns/a/sa/b").getName());
+  }
+
+  @Test
+  void aListenersAllowListMayBeGivenAsAList() throws Exception {
+    Map<String, Object> configs = configs();
+    configs.put(
+        "spiffe.principal.listener.internal.allowed.ids",
+        List.of("spiffe://k8s.example.org/ops", "spiffe://k8s.example.org/admin"));
+    assertEquals(
+        "spiffe://k8s.example.org/admin", principal(configs, "INTERNAL", "/admin").getName());
+    assertEquals("spiffe-unauthorized", principal(configs, "INTERNAL", "/ns/a/sa/b").getName());
   }
 
   @Test
