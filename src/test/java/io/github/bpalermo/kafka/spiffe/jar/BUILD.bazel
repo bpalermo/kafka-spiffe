@@ -1,5 +1,7 @@
+load("@rules_java//java:java_library.bzl", "java_library")
 load("//bazel/java:defs.bzl", "JAVACOPTS")
 load("//bazel/java:junit.bzl", "java_junit_test")
+load("//bazel/java:kafka.bzl", "KAFKA_VERSIONS")
 
 # The published artifact as Maven Central receives it (design, section 9): the jar,
 # its POM, and the sources and javadoc jars, read from the files java_export builds.
@@ -22,3 +24,77 @@ java_junit_test(
     test_classes = ["io.github.bpalermo.kafka.spiffe.jar.JarTest"],
     deps = ["@maven//:org_junit_jupiter_junit_jupiter_api"],
 )
+
+# Run in a JVM of its own by jar_classpath_*_test, so it depends on nothing the
+# published jar does not have: Kafka's public API (provided) and the JDK-only
+# handshake helper.
+java_library(
+    name = "jar_driver",
+    testonly = True,
+    srcs = ["JarDriver.java"],
+    javacopts = JAVACOPTS,
+    deps = [
+        "//bazel/maven:kafka_clients_provided",
+        "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:handshake",
+    ],
+)
+
+# The published jar in a new JVM beside nothing but kafka-clients and slf4j-api
+# (design, section 9, "The jar"), for every Kafka version of the matrix: a class the
+# jar needs and does not hold fails here. And, `manual` because each downloads a
+# Kafka distribution, beside a 3.0 and a 4.4 broker's whole libs/; CI's `jar` job
+# runs those.
+[
+    java_junit_test(
+        name = "jar_classpath_%s_test" % name,
+        size = "medium",
+        srcs = ["JarClassPathTest.java"],
+        data = [
+            ":jar_driver",
+            "//:kafka-spiffe-maven-artifact",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:handshake",
+        ] + data,
+        javacopts = JAVACOPTS,
+        jvm_flags = [
+            "-Djar.binary=$(rootpath //:kafka-spiffe-maven-artifact)",
+            "-Djar.driver=$(rootpath :jar_driver)",
+            "-Djar.handshake=$(rootpath //src/test/java/io/github/bpalermo/kafka/spiffe/testing:handshake)",
+        ] + flags,
+        tags = tags,
+        test_classes = ["io.github.bpalermo.kafka.spiffe.jar.JarClassPathTest"],
+        deps = [
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+            "@maven//:io_netty_netty_transport_classes_epoll",
+            "@maven//:org_junit_jupiter_junit_jupiter_api",
+        ],
+    )
+    for name, data, flags, tags in [
+        (
+            repo,
+            [
+                "@%s//:org_apache_kafka_kafka_clients" % repo,
+                "@maven//:org_slf4j_slf4j_api",
+            ],
+            [
+                "-Djar.kafka=$(rootpath @%s//:org_apache_kafka_kafka_clients)" % repo,
+                "-Djar.slf4j=$(rootpath @maven//:org_slf4j_slf4j_api)",
+            ],
+            [],
+        )
+        for repo in KAFKA_VERSIONS
+    ] + [
+        (
+            "libs_" + line,
+            [
+                "@kafka_dist_%s//:libs" % line,
+                "@kafka_dist_%s//:libs/kafka-clients-%s.jar" % (line, version),
+            ],
+            ["-Djar.libs=$(rootpath @kafka_dist_%s//:libs/kafka-clients-%s.jar)" % (line, version)],
+            ["manual"],
+        )
+        for line, version in [
+            ("3_0", "3.0.2"),
+            ("4_4", "4.4.0"),
+        ]
+    ]
+]

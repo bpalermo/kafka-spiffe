@@ -6,16 +6,24 @@ load("//bazel/java:defs.bzl", "JAVACOPTS")
 java_library(
     name = "testing",
     testonly = True,
-    srcs = [
-        "Handshake.java",
-        "TestPki.java",
-    ],
+    srcs = ["TestPki.java"],
     javacopts = JAVACOPTS,
     visibility = ["//src/test:__subpackages__"],
+    exports = [":handshake"],
     deps = [
         "@maven//:org_bouncycastle_bcpkix_jdk18on",
         "@maven//:org_bouncycastle_bcprov_jdk18on",
     ],
+)
+
+# The in-memory handshake alone, on the JDK only, for a class path that must hold
+# nothing else (the jar's tests).
+java_library(
+    name = "handshake",
+    testonly = True,
+    srcs = ["Handshake.java"],
+    javacopts = JAVACOPTS,
+    visibility = ["//src/test:__subpackages__"],
 )
 
 # A Workload API for tests: grpc-java on Netty's epoll on a Unix domain socket, with
