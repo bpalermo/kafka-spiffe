@@ -24,13 +24,22 @@ PORTABLE = [
 PORTABLE_SRCS = [c + ".java" for c in PORTABLE] + ["TlsPeers.java"]
 
 # Against kafka-clients 3.0.0, the floor the library is compiled against.
-# KafkaSslFactoryTest uses 3.0's internal SslFactory.
+# KafkaSslFactoryTest uses 3.0's internal SslFactory; OperatorDocsTest checks the
+# configuration reference and examples of docs/operator.md.
 java_junit_test(
     name = "kafka_test",
     size = "medium",
-    srcs = PORTABLE_SRCS + ["KafkaSslFactoryTest.java"],
+    srcs = PORTABLE_SRCS + [
+        "KafkaSslFactoryTest.java",
+        "OperatorDocsTest.java",
+    ],
+    data = ["//docs:operator.md"],
     javacopts = JAVACOPTS,
-    test_classes = ["io.github.bpalermo.kafka.spiffe.kafka." + c for c in PORTABLE + ["KafkaSslFactoryTest"]],
+    jvm_flags = ["-Ddocs.operator=$(rootpath //docs:operator.md)"],
+    test_classes = ["io.github.bpalermo.kafka.spiffe.kafka." + c for c in PORTABLE + [
+        "KafkaSslFactoryTest",
+        "OperatorDocsTest",
+    ]],
     runtime_deps = [
         "@maven//:org_apache_kafka_kafka_clients",
         "@maven//:org_slf4j_slf4j_api",
