@@ -165,6 +165,14 @@ public final class SpiffePrincipalBuilder
     PrincipalPolicy.Outcome outcome = policy.principal(id, context.listenerName());
     if (outcome.refusal() != null) {
       logRefusal(context, id.toString(), outcome.refusal());
+    } else if (LOG.isDebugEnabled()) {
+      // Once per connection: build caches the principal for the session.
+      LOG.debug(
+          "{} on listener {} from {} gets {}",
+          id,
+          context.listenerName(),
+          context.clientAddress(),
+          outcome.principal());
     }
     return outcome.principal();
   }

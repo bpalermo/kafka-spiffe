@@ -61,6 +61,16 @@ HARNESSES = {
             "@kafka_4_0//:org_apache_kafka_kafka_2_13",
         ],
     ),
+    "kafka_4_3_test": (
+        "kafka_4_3",
+        "Kraft4",
+        [
+            "@kafka_4_3//:org_apache_kafka_kafka_test_common_runtime",
+        ],
+        [
+            "@kafka_4_3//:org_apache_kafka_kafka_2_13",
+        ],
+    ),
     "kafka_4_4_test": (
         "kafka_4_4",
         "Kraft4",

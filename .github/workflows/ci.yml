@@ -124,7 +124,7 @@ jobs:
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_3_0_test
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_4_4_test
 
-  # The broker tests of the design's CI matrix (section 9), KRaft (3.3, 3.9, 4.0, 4.4)
+  # The broker tests of the design's CI matrix (section 9), KRaft (3.3, 3.9, 4.0, 4.3, 4.4)
   # and ZooKeeper with AclAuthorizer (3.0, 3.9), and the clients of one Kafka version
   # against brokers of another (a 3.0 client and a 4.4 broker, a 4.4 client and a 3.9
   # broker), run in the build and jdk jobs above: each starts its cluster in the

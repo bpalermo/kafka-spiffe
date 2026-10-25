@@ -48,7 +48,7 @@ bazel build //:kafka-spiffe-maven-artifact   # the published jar
 bazel run //:format                  # google-java-format and buildifier
 ```
 
-The bytecode is Java 17. The library is compiled against `kafka-clients` 3.0.0, which is provided by the application or broker and never shipped; the tests of each supported Kafka version (3.0, 3.3, 3.9, 4.0, 4.4) run against that version's own pinned jars. See [AGENTS.md](AGENTS.md) for the conventions.
+The bytecode is Java 17. The library is compiled against `kafka-clients` 3.0.0, which is provided by the application or broker and never shipped; the tests of each supported Kafka version (3.0, 3.3, 3.9, 4.0, 4.3, 4.4) run against that version's own pinned jars. See [AGENTS.md](AGENTS.md) for the conventions.
 
 ## License
 
