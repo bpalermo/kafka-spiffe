@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. The [README](README.md) h
 
 ## What this is
 
-kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 5 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`, and in `kafka` the configuration, the engine factory and the principal builder); phase 6 is the published jar, its release and the operator's documentation.
+kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 6 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`, and in `kafka` the configuration, the engine factory and the principal builder; the published jar, its release and the operator's documentation); phase 7 is the in-process broker and end-to-end tests.
 
 ## Commands
 
@@ -52,6 +52,7 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 - **Test certificates.** `//src/test/java/io/github/bpalermo/kafka/spiffe/testing` issues X.509-SVIDs with BouncyCastle (`TestPki`, malformed ones included, around a fixed `TestPki.NOW` that tests set their clocks to) and runs TLS handshakes in memory (`Handshake`). Tests use it rather than files or keytool.
 - **The published jar.** `//:kafka-spiffe` holds the classes of every library package and nothing else; its POM names only `kafka-clients` 3.0.0 and `slf4j-api` 1.7.36, as provided, from `bazel/maven/pom.tpl` (which has no placeholder for generated dependencies: java_export would list those two again at compile scope). A new library package goes into the export's `exports`. `//src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_test` checks the contents, the Java 17 bytecode, the manifest and the POM. `jar_classpath_<kafka repo>_test` runs a handshake and builds a principal in a new JVM whose class path is only the jar, `kafka-clients` and `slf4j-api` (`JarDriver`, which depends on nothing else; `testing:handshake` is the JDK-only handshake helper), so a class the jar needs and does not hold fails there. `jar_classpath_libs_3_0_test` and `_libs_4_4_test` do the same beside a broker distribution's whole `libs/` (`@kafka_dist_3_0`, `@kafka_dist_4_4` in `MODULE.bazel`); they are `manual`, so `//...` never downloads the distributions, and CI's `jar` job runs them by name.
 - **Version.** One version, in `bazel/version.bzl`. Do not edit it by hand; the release workflow sets it from the tag with `scripts/set-version.sh`.
+- **Operator documentation.** `docs/operator.md` is for the people who run the library. A new or changed `spiffe.*` key goes in its configuration reference, with the `ConfigDef`'s type and default: `OperatorDocsTest` (in `kafka_test`) fails otherwise, and also loads every `properties` example as Kafka would (backslashes are escapes there) and configures the library with it.
 - **Design changes.** Update `docs/design.md` in the same change.
 
 ## Workflow
