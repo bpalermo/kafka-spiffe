@@ -61,11 +61,21 @@ class PeerVerificationTest {
   void withoutADomainNothingIsRegistered() throws Exception {
     javax.management.ObjectName any = new javax.management.ObjectName("*:type=peer-verification,*");
     int before = SERVER.queryNames(any, null).size();
-    PeerVerification verification = PeerVerification.acquire(null);
+    // An empty domain is none too, whichever of the two comes first.
+    PeerVerification empty = PeerVerification.acquire("");
+    PeerVerification none = PeerVerification.acquire(null);
+    try {
+      assertSame(empty, none);
+      assertEquals(before, SERVER.queryNames(any, null).size());
+    } finally {
+      none.release();
+      empty.release();
+    }
+    PeerVerification again = PeerVerification.acquire("");
     try {
       assertEquals(before, SERVER.queryNames(any, null).size());
     } finally {
-      verification.release();
+      again.release();
     }
   }
 

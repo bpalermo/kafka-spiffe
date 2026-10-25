@@ -76,15 +76,16 @@ final class PeerVerification implements SpiffeTrustManager.Observer {
   }
 
   /**
-   * The counts of {@code domain} (null for none), registered as MBeans until {@link #release()} has
-   * been called once for each call of this.
+   * The counts of {@code domain} (null or empty for none), registered as MBeans until {@link
+   * #release()} has been called once for each call of this.
    */
   static PeerVerification acquire(String domain) {
+    // An empty domain is none, as X509SourceRegistry.shared reads it.
+    String named = domain == null || domain.isEmpty() ? null : domain;
     synchronized (BY_DOMAIN) {
       PeerVerification verification =
-          BY_DOMAIN.computeIfAbsent(
-              domain == null ? "" : domain, d -> new PeerVerification(domain));
-      if (verification.users++ == 0 && domain != null) {
+          BY_DOMAIN.computeIfAbsent(named == null ? "" : named, d -> new PeerVerification(named));
+      if (verification.users++ == 0 && verification.domain != null) {
         verification.register();
       }
       return verification;
