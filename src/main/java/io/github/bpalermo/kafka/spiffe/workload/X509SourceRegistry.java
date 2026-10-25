@@ -45,9 +45,26 @@ public final class X509SourceRegistry {
     this.jmxDomain = jmxDomain;
   }
 
+  private static final Map<String, X509SourceRegistry> SHARED_BY_DOMAIN = new HashMap<>();
+
   /** The registry of the process. */
   public static X509SourceRegistry shared() {
     return SHARED;
+  }
+
+  /**
+   * The registry of the process whose sources register their MBeans in {@code jmxDomain}, or none
+   * if it is null. Factories configured alike share one.
+   */
+  public static X509SourceRegistry shared(String jmxDomain) {
+    if (JMX_DOMAIN.equals(jmxDomain)) {
+      return SHARED;
+    }
+    synchronized (SHARED_BY_DOMAIN) {
+      return SHARED_BY_DOMAIN.computeIfAbsent(
+          jmxDomain == null ? "" : jmxDomain,
+          domain -> new X509SourceRegistry(Clock.systemUTC(), domain.isEmpty() ? null : domain));
+    }
   }
 
   /**

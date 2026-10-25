@@ -49,7 +49,8 @@ public final class TestPki {
     KeyPair keys = ec();
     X500Name name = new X500Name("O=SPIFFE,CN=" + trustDomain + " root");
     X509v3CertificateBuilder builder =
-        builder(name, name, keys, NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(365)));
+        builder(
+            name, name, keys, NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(365 * 50)));
     authorityExtensions(builder, trustDomain);
     return new Authority(trustDomain, keys, sign(builder, keys.getPrivate()), List.of());
   }
@@ -95,7 +96,7 @@ public final class TestPki {
               new X500Name("O=SPIFFE,CN=" + trustDomain + " intermediate " + SERIAL.get()),
               intermediateKeys,
               NOW.minus(Duration.ofDays(1)),
-              NOW.plus(Duration.ofDays(30)));
+              NOW.plus(Duration.ofDays(365 * 50)));
       authorityExtensions(builder, trustDomain);
       X509Certificate intermediate = sign(builder, keys.getPrivate());
       List<X509Certificate> above = new ArrayList<>();

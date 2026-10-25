@@ -54,6 +54,7 @@ What A relies on, read from `kafka-clients` 4.3.1 and checked against 3.0.0 and 
 - On the inter-broker listener `SslFactory.configure()` validates the factory by a handshake with itself, with an empty peer host. So a broker's client side must accept its own server SVID, and the broker's own ID or trust domain must be allowed (§4).
 - The factory is never told which listener it is for: unknown keys such as `spiffe.*` reach it, but a listener-prefixed unknown key (`listener.name.x.spiffe.foo`) arrives still prefixed, and is dropped altogether on its own listener when the same key is also set without the prefix (phase 0, Q4). Handshake policy is therefore per process; the principal builder, which is told the listener, refines it per listener with keys that carry the listener name inside the `spiffe.` namespace (§4, §5).
 - A broker creates one factory per network thread per listener (`num.network.threads`) and one per inter-broker client (replica fetchers, the controller channel, transaction markers): ten on a 4.4 broker with two TLS listeners. They share one source through the registry.
+- Kafka does not close every factory it makes: `SslFactory.validateReconfiguration` configures one and drops it, and so does `configure` when the validation handshake fails (3.0 to 4.4). So a factory registers no listener on the shared source, which would keep it reachable, and builds a rotated snapshot on the next engine it makes; its handle on the source is released by `close()` or, for a factory dropped unclosed, when it is collected (`java.lang.ref.Cleaner`).
 - The principal builder is created and configured **per connection** (`SslChannelBuilder`'s authenticator is), and `build` is called **for every request**, on the network thread. Its `configure` must be cheap and its principal is computed once per connection.
 - **`spiffe.*` keys are static, by the library's own policy**, not because Kafka withholds them. `kafka-configs --alter` accepts them (stored as sensitive, values hidden), and Kafka can still hand one to the library: when a standard SSL key of a listener changes, the new configuration it passes to `SslFactory.reconfigure` includes every non-Kafka key, and `SslFactory` copies into the next factory's configuration those its `reconfigurableConfigs()` lists (`DynamicBrokerConfig.processReconfigurable`, `SslFactory.createNewSslEngineFactory` at 4.4.0); and a 3.x ZooKeeper broker loads its stored dynamic configuration before it creates its listeners (`KafkaServer.scala:268` before `:383` at 3.9.1, `KafkaConfig.originals` delegating to the current configuration), so a stored value reaches `configure()` at the next restart. The policy: `reconfigurableConfigs()` lists no `spiffe.*` key, so a rebuilt factory keeps its predecessor's `spiffe.*` values; and the operator documentation says never to set `spiffe.*` dynamically, since on a ZooKeeper broker a stored value takes effect at the next restart and `configure()` cannot tell it from a static one (phase 0, Q3).
 - The factory and the principal builder are created with `Utils.newInstance`, not as `Plugin<>`, so KIP-877 plugin metrics do not reach them. Metrics are JMX MBeans of their own (§7).
@@ -125,7 +126,7 @@ Every key starts with `spiffe.`. They are read from the map Kafka passes to `con
 
 | Key | Meaning | Default |
 |---|---|---|
-| `spiffe.endpoint.socket` | `unix:///path` of the Workload API. Only `unix:` is accepted | `$SPIFFE_ENDPOINT_SOCKET` |
+| `spiffe.endpoint.socket` | `unix:///path` (or `unix:/path`) of the Workload API, an absolute path. Nothing but `unix:` is accepted | `$SPIFFE_ENDPOINT_SOCKET` |
 | `spiffe.svid.hint` | Pick the SVID with this Workload API hint | the first SVID |
 | `spiffe.svid.id` | Pick the SVID with this SPIFFE ID | the first SVID |
 | `spiffe.startup.timeout.ms` | How long `configure()` waits for the first SVID; `-1` waits for ever, `0` only accepts a source that is already warm | 120000 |
@@ -141,7 +142,7 @@ Every key starts with `spiffe.`. They are read from the map Kafka passes to `con
 | `spiffe.peer.allowed.trust.domains` | Any ID of these trust domains |
 | `spiffe.peer.allowed.id.patterns` | Path globs, such as `spiffe://k8s.example.org/ns/*/sa/**`: `*` is one whole segment, `**` (last only) one or more trailing segments, and the trust domain is exact. `web-*` is refused, not matched literally |
 
-At least one of the three is required, on clients and on brokers: there is no implicit "anything a bundle vouches for". A broker also requires `ssl.client.auth=required`, unless `spiffe.server.allow.unauthenticated=true`.
+At least one of the three is required, on clients and on brokers: there is no implicit "anything a bundle vouches for". A broker also requires `ssl.client.auth=required`, unless `spiffe.server.allow.unauthenticated=true`; only a broker's configuration has `ssl.client.auth`, so a client's factory is not affected, and a server engine of a factory without it requires a client certificate. `spiffe.principal.listener.<listener>.*` keys are accepted by their shape (`allowed.ids`, `allowed.trust.domains`, `allowed.id.patterns`); any other `spiffe.*` key not in the tables is an error.
 
 ### TLS
 
@@ -373,7 +374,7 @@ Each Kafka version is its own `maven.install` repository, so the tests of one ve
 1. The repository: `MODULE.bazel` (one Maven repository per Kafka version), `.bazelrc` (Java 17, the JDK matrix), lint, the JUnit macro, CI, `AGENTS.md`.
 2. `id` and `x509`, with their tests. Done.
 3. `workload` and `workload.h2`: HTTP/2 and HPACK, the gRPC stream, the wire reader, `X509Source`, the registry, the fake Workload API (grpc-java, test-only), the Testcontainers SPIRE harness and the recorded real-SVID fixtures, backoff and expiry, JMX. The Netty and gRPC artifacts leave the library's dependencies (they stay, test-only, for the fake). Done.
-4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests.
+4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests. Done: each factory keeps the JDK context of the newest snapshot (rebuilt on the source's thread, and checked against the source when an engine is made, so no update is missed), shares its source with the process's other factories, and is tested in Kafka's own `SslFactory` (3.0) including the inter-broker validation handshake; the configuration and engine-pair tests run on every Kafka version of the matrix.
 5. `SpiffePrincipalBuilder`: serde, mapping rules, per-listener policy, an authorizer test.
 6. The jar and its test, publishing, the operator's documentation (broker and client configuration, ACL migration).
 7. End to end with federated SPIRE, on phase 3's Testcontainers harness with an `apache/kafka` container, and a migration guide from spiffe-helper: ACLs for the new principals first, then the broker, then the clients one at a time.

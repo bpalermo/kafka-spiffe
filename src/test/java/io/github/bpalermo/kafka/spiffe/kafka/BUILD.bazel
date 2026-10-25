@@ -1,15 +1,57 @@
 load("//bazel/java:defs.bzl", "JAVACOPTS")
 load("//bazel/java:junit.bzl", "java_junit_test")
+load("//bazel/java:kafka.bzl", "KAFKA_VERSIONS", "kafka_version_test")
 
+# Against kafka-clients 3.0.0, the floor the library is compiled against. The same
+# tests on each Kafka version of the design's matrix come with the broker tests.
 java_junit_test(
     name = "kafka_test",
+    size = "medium",
     srcs = glob(["*.java"]),
     javacopts = JAVACOPTS,
-    test_classes = ["io.github.bpalermo.kafka.spiffe.kafka.PlaceholderTest"],
-    runtime_deps = ["@maven//:org_apache_kafka_kafka_clients"],
+    test_classes = [
+        "io.github.bpalermo.kafka.spiffe.kafka.KafkaSslFactoryTest",
+        "io.github.bpalermo.kafka.spiffe.kafka.SpiffeConfigTest",
+        "io.github.bpalermo.kafka.spiffe.kafka.SpiffeSslEngineFactoryTest",
+    ],
+    runtime_deps = [
+        "@maven//:org_apache_kafka_kafka_clients",
+        "@maven//:org_slf4j_slf4j_api",
+    ],
     deps = [
         "//bazel/maven:kafka_clients_provided",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
         "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
+        "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+        "@maven//:io_netty_netty_transport_classes_epoll",
         "@maven//:org_junit_jupiter_junit_jupiter_api",
     ],
 )
+
+# The configuration and engine-pair tests on each Kafka version of the matrix
+# (kafka_3_0_test ... kafka_4_4_test): they use only Kafka's public API, so they run
+# against every version's jars. KafkaSslFactoryTest uses 3.0's internal SslFactory.
+[
+    kafka_version_test(
+        size = "medium",
+        srcs = [
+            "SpiffeConfigTest.java",
+            "SpiffeSslEngineFactoryTest.java",
+        ],
+        repo = repo,
+        test_classes = [
+            "io.github.bpalermo.kafka.spiffe.kafka.SpiffeConfigTest",
+            "io.github.bpalermo.kafka.spiffe.kafka.SpiffeSslEngineFactoryTest",
+        ],
+        version = version,
+        deps = [
+            "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
+            "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+            "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+            "@maven//:io_netty_netty_transport_classes_epoll",
+        ],
+    )
+    for repo, version in KAFKA_VERSIONS.items()
+]
