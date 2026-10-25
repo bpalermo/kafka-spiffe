@@ -1,3 +1,6 @@
+load("@rules_jvm_external//:defs.bzl", "java_export")
+load("//bazel:version.bzl", "VERSION")
+
 exports_files([
     ".bazelversion",
     "pmd.xml",
@@ -12,4 +15,30 @@ alias(
 alias(
     name = "format.check",
     actual = "//bazel/format:format.check",
+)
+
+# The published artifact, io.github.bpalermo:kafka-spiffe: the classes of every
+# library package and nothing else (kafka-clients and slf4j-api are provided, so
+# neverlink, and appear in the POM with scope provided). Generated targets:
+# `kafka-spiffe` (the jar), `kafka-spiffe-pom`, `kafka-spiffe-docs` (javadoc),
+# `kafka-spiffe-maven-source` and `kafka-spiffe.publish` (release workflow only).
+java_export(
+    name = "kafka-spiffe",
+    javadocopts = ["-Xdoclint:all,-missing"],
+    manifest_entries = {
+        "Automatic-Module-Name": "io.github.bpalermo.kafka.spiffe",
+        "Implementation-Title": "kafka-spiffe",
+        "Implementation-Version": VERSION,
+    },
+    maven_coordinates = "io.github.bpalermo:kafka-spiffe:" + VERSION,
+    pom_template = "//bazel/maven:pom.tpl",
+    visibility = ["//:__subpackages__"],
+    exports = [
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/id",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/metrics",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/workload/h2",
+        "//src/main/java/io/github/bpalermo/kafka/spiffe/x509",
+    ],
 )

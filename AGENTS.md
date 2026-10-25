@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. The [README](README.md) h
 
 ## What this is
 
-kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 4 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`, and in `kafka` the configuration and the engine factory); the principal builder is phase 5.
+kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 5 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`, and in `kafka` the configuration, the engine factory and the principal builder); phase 6 is the published jar, its release and the operator's documentation.
 
 ## Commands
 
@@ -16,6 +16,7 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 | One test target | `bazel test //src/test/java/io/github/bpalermo/kafka/spiffe/id:id_test` |
 | Tests on another JDK | `bazel test --config=jdk21 //...` (`jdk17`, `jdk21`, `jdk25`) |
 | The tests of one Kafka version | `bazel test //matrix:kafka_3_9_test` |
+| The published jar, POM, sources and javadoc | `bazel build //:kafka-spiffe-maven-artifact //:kafka-spiffe-pom //:kafka-spiffe-maven-source //:kafka-spiffe-docs` |
 | Format (rewrites files) | `bazel run //:format` |
 | Check formatting | `bazel run //:format.check` |
 | Re-pin the main Maven repository | `REPIN=1 bazel run @maven//:pin` |
@@ -36,6 +37,8 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 | `bazel/java` | `JAVACOPTS`, the JUnit macro (`junit.bzl`), the per-Kafka-version macro (`kafka.bzl`) |
 | `bazel/maven` | Maven lockfiles, and the provided (neverlink) and Netty epoll (test-only) targets |
 | `bazel/lint`, `bazel/format` | PMD aspect and the formatters |
+| `BUILD.bazel` (root) | `//:kafka-spiffe`, the `java_export` of the published artifact; its POM template is `bazel/maven/pom.tpl`. `src/test/.../jar` tests what it builds |
+| `bazel/version.bzl`, `scripts/` | The version (`0.0.0-dev` on main) and `set-version.sh`, which the release workflow runs |
 
 ## Things to know before changing code
 
@@ -47,6 +50,8 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 - **Lint.** First-party Java compiles with `-Xlint:all -Werror` (`JAVACOPTS`; every first-party target sets `javacopts = JAVACOPTS`) and Error Prone, so a warning is a build failure. PMD lints `java_library` and `java_binary` sources under `--config=lint` (ruleset `pmd.xml`; tests are not visited). Exclude a rule in `pmd.xml` with its reason; do not scatter suppressions.
 - **Placeholders.** A package not yet implemented holds a `Placeholder` class and test so the build and lint have something to check. Delete it with the package's first real class.
 - **Test certificates.** `//src/test/java/io/github/bpalermo/kafka/spiffe/testing` issues X.509-SVIDs with BouncyCastle (`TestPki`, malformed ones included, around a fixed `TestPki.NOW` that tests set their clocks to) and runs TLS handshakes in memory (`Handshake`). Tests use it rather than files or keytool.
+- **The published jar.** `//:kafka-spiffe` holds the classes of every library package and nothing else; its POM names only `kafka-clients` 3.0.0 and `slf4j-api` 1.7.36, as provided, from `bazel/maven/pom.tpl` (which has no placeholder for generated dependencies: java_export would list those two again at compile scope). A new library package goes into the export's `exports`. `//src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_test` checks the contents, the Java 17 bytecode, the manifest and the POM.
+- **Version.** One version, in `bazel/version.bzl`. Do not edit it by hand; the release workflow sets it from the tag with `scripts/set-version.sh`.
 - **Design changes.** Update `docs/design.md` in the same change.
 
 ## Workflow

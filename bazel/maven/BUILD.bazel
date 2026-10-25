@@ -2,7 +2,7 @@ load("@rules_java//java:defs.bzl", "java_library")
 
 package(default_visibility = ["//:__subpackages__"])
 
-exports_files(glob(["*_install.json"]))
+exports_files(glob(["*_install.json"]) + ["pom.tpl"])
 
 # Compile-time only (neverlink): on the compile class path, never on a run time one
 # and never shipped. Whoever runs the library supplies Kafka and slf4j; a test chooses
