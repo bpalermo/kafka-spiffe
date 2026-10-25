@@ -10,6 +10,7 @@ import io.github.bpalermo.kafka.spiffe.testing.TestPki;
 import io.netty.channel.epoll.Epoll;
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
@@ -51,8 +52,9 @@ import org.junit.jupiter.api.Test;
  * broker runs in this process on the target's Kafka version, as in {@link BrokerTest}, and the
  * client in a JVM of its own ({@link ClientDriver}) whose class path is only the published jar, the
  * other version's {@code kafka-clients} and {@code slf4j-api}. The client produces and consumes
- * under ACLs on its {@code Spiffe:} principal, keeps its connections while the broker's SVID
- * rotates, and then connects anew to the rotated broker.
+ * under ACLs on its {@code Spiffe:} principal, and keeps its connections while its trust domain
+ * moves to a new root and its SVID is reissued by it; once the broker trusts only the new root, a
+ * new connection of the client's succeeds, so the client presents the new SVID.
  *
  * <p>System properties: {@code client.kafka} and {@code client.version}, the client's {@code
  * kafka-clients} jar and its version; {@code jar.binary}, {@code jar.driver} and {@code jar.slf4j},
@@ -69,6 +71,7 @@ class CrossVersionTest {
 
   private static final TestPki.Authority BROKER_CA = TestPki.root("example.org");
   private static final TestPki.Authority CLIENT_CA = TestPki.root("k8s.example.org");
+  private static final TestPki.Authority NEW_CLIENT_CA = TestPki.root("k8s.example.org");
 
   private final List<AutoCloseable> closeables = new ArrayList<>();
   private Path directory;
@@ -110,7 +113,7 @@ class CrossVersionTest {
   }
 
   @Test
-  void aClientOfAnotherVersionProducesAndConsumesAcrossABrokerRotation() throws Exception {
+  void aClientOfAnotherVersionProducesAndConsumesAcrossARotationToANewRoot() throws Exception {
     // This JVM's Admin, of the broker's version, sets up the topic and the client's ACLs.
     FakeWorkloadApi adminAgent = agent("admin.sock", ADMIN, CLIENT_CA, BROKER_CA);
     try (Admin admin = Admin.create(clientConfigs(adminAgent))) {
@@ -166,19 +169,40 @@ class CrossVersionTest {
     String first = line(reader, out);
     assertTrue(first.startsWith("round "), first);
 
-    // A new broker SVID, from the same root, which the open connections never see.
-    long updates = updates();
-    brokerAgent.publish(response(BROKER, BROKER_CA, CLIENT_CA));
-    eventually(() -> updates() > updates, "the broker's source takes the update");
+    // k8s.example.org moves to a new root: the broker trusts both, the client's SVID comes from
+    // the new one, and the client takes it (its second update) before its next round.
+    List<X509Certificate> both = List.of(CLIENT_CA.certificate(), NEW_CLIENT_CA.certificate());
+    publishToBroker(both);
+    appAgent.publish(
+        new FakeWorkloadApi.Response()
+            .svid(new FakeWorkloadApi.Svid(APP, svid(APP, NEW_CLIENT_CA), both, ""))
+            .federated("spiffe://example.org", List.of(BROKER_CA.certificate())));
     OutputStream in = driver.getOutputStream();
-    in.write("\n".getBytes(StandardCharsets.UTF_8));
-    in.flush();
-
+    tell(in, "2");
     assertEquals(
         first, line(reader, out), "connection-creation-total of the producer and consumer");
+
+    // The broker drops the old root: only the new SVID gets a new connection through.
+    publishToBroker(List.of(NEW_CLIENT_CA.certificate()));
+    tell(in, "");
     assertEquals("fresh", line(reader, out));
     assertTrue(driver.waitFor(WAIT.toSeconds(), TimeUnit.SECONDS), "the driver exits");
     assertEquals(0, driver.exitValue());
+  }
+
+  private static void tell(OutputStream in, String line) throws IOException {
+    in.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+    in.flush();
+  }
+
+  /** Publishes the broker's SVID with {@code clientRoots} as k8s.example.org's bundle. */
+  private void publishToBroker(List<X509Certificate> clientRoots) throws InterruptedException {
+    long updates = updates();
+    brokerAgent.publish(
+        new FakeWorkloadApi.Response()
+            .svid(FakeWorkloadApi.Svid.of(svid(BROKER, BROKER_CA), BROKER_CA))
+            .federated("spiffe://k8s.example.org", clientRoots));
+    eventually(() -> updates() > updates, "the broker's source takes the update");
   }
 
   /** The driver's next line of output, within {@link #WAIT}. */
@@ -196,17 +220,21 @@ class CrossVersionTest {
   /** An SVID valid now, with the other trust domain's bundle, as federated agents deliver it. */
   private static FakeWorkloadApi.Response response(
       String id, TestPki.Authority own, TestPki.Authority other) {
-    Instant now = Instant.now();
-    TestPki.Issued svid =
-        own.leaf()
-            .uris(id)
-            .validity(now.minus(Duration.ofMinutes(5)), now.plus(Duration.ofHours(1)))
-            .issue();
     String otherDomain = other == BROKER_CA ? "example.org" : "k8s.example.org";
     List<X509Certificate> bundle = List.of(other.certificate());
     return new FakeWorkloadApi.Response()
-        .svid(FakeWorkloadApi.Svid.of(svid, own))
+        .svid(FakeWorkloadApi.Svid.of(svid(id, own), own))
         .federated("spiffe://" + otherDomain, bundle);
+  }
+
+  /** An SVID valid now. */
+  private static TestPki.Issued svid(String id, TestPki.Authority issuer) {
+    Instant now = Instant.now();
+    return issuer
+        .leaf()
+        .uris(id)
+        .validity(now.minus(Duration.ofMinutes(5)), now.plus(Duration.ofHours(1)))
+        .issue();
   }
 
   private FakeWorkloadApi agent(

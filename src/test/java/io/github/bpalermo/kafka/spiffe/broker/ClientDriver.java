@@ -1,9 +1,11 @@
 package io.github.bpalermo.kafka.spiffe.broker;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -11,6 +13,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -27,10 +31,12 @@ import org.apache.kafka.common.serialization.StringSerializer;
  * the engine factory, against the test's broker.
  *
  * <p>It prints {@code version <kafka-clients version>}, then {@code round <connections>} after
- * producing five records and consuming them back; waits for a line on its standard input; does
- * another round on the same clients; and prints {@code fresh} once a new producer, on a new
- * connection, has had a record acknowledged. {@code <connections>} is the producer's and the
- * consumer's {@code connection-creation-total}. A failure is an exception, which exits 1.
+ * producing five records and consuming them back. It then reads a number from its standard input,
+ * waits until its Workload API source has taken that many updates, does another round on the same
+ * clients and prints {@code round <connections>} again; reads another line, and prints {@code
+ * fresh} once a new producer, on a new connection, has had a record acknowledged. {@code
+ * <connections>} is the producer's and the consumer's {@code connection-creation-total}. A failure
+ * is an exception, which exits 1.
  *
  * <p>Arguments: the bootstrap servers, the Workload API socket, the broker's SPIFFE ID, the topic.
  */
@@ -54,15 +60,21 @@ public final class ClientDriver {
     configs.put("acks", "all");
     configs.put("auto.offset.reset", "earliest");
     String topic = args[3];
+    ObjectName source =
+        new ObjectName("kafka.spiffe:type=x509-source,socket=" + ObjectName.quote(args[1]));
     // System.out flushes each line, which the test reads as it comes.
     try (BufferedReader in =
         new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
-      run(configs, topic, in, System.out);
+      run(configs, topic, source, in, System.out);
     }
   }
 
   private static void run(
-      Map<String, Object> configs, String topic, BufferedReader in, PrintStream out)
+      Map<String, Object> configs,
+      String topic,
+      ObjectName source,
+      BufferedReader in,
+      PrintStream out)
       throws Exception {
     out.println("version " + version());
     try (KafkaProducer<String, String> producer =
@@ -72,17 +84,38 @@ public final class ClientDriver {
       consumer.assign(List.of(new TopicPartition(topic, 0)));
       round(producer, consumer, topic);
       out.println("round " + (connections(producer.metrics()) + connections(consumer.metrics())));
-      if (in.readLine() == null) {
-        throw new IllegalStateException("standard input closed");
-      }
+      awaitUpdates(source, Long.parseLong(line(in)));
       round(producer, consumer, topic);
       out.println("round " + (connections(producer.metrics()) + connections(consumer.metrics())));
     }
+    line(in);
     try (KafkaProducer<String, String> fresh =
         new KafkaProducer<>(configs, new StringSerializer(), new StringSerializer())) {
       fresh.send(new ProducerRecord<>(topic, 0, "fresh", "fresh")).get();
     }
     out.println("fresh");
+  }
+
+  private static String line(BufferedReader in) throws IOException {
+    String line = in.readLine();
+    if (line == null) {
+      throw new IllegalStateException("standard input closed");
+    }
+    return line;
+  }
+
+  /**
+   * Waits until the source's {@code updates-total}, in this JVM's MBeans, reaches {@code count}.
+   */
+  private static void awaitUpdates(ObjectName source, long count) throws Exception {
+    MBeanServer server = ManagementFactory.getPlatformMBeanServer();
+    Instant deadline = Instant.now().plus(WAIT);
+    while (((Number) server.getAttribute(source, "updates-total")).longValue() < count) {
+      if (Instant.now().isAfter(deadline)) {
+        throw new IllegalStateException("the source did not take " + count + " updates");
+      }
+      Thread.sleep(50);
+    }
   }
 
   /** Five records produced, and read back by the consumer. */
