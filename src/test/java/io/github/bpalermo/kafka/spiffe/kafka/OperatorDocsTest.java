@@ -36,6 +36,12 @@ class OperatorDocsTest {
   private static final Pattern PROPERTIES =
       Pattern.compile("^```properties\\n(.*?)^```$", Pattern.MULTILINE | Pattern.DOTALL);
 
+  private static final Pattern YAML =
+      Pattern.compile("^```yaml\\n(.*?)^```$", Pattern.MULTILINE | Pattern.DOTALL);
+  // A YAML single-quoted value: what is between the quotes is taken as it is.
+  private static final Pattern ENVIRONMENT = Pattern.compile("^\\s*(KAFKA_[A-Z0-9_]+): '(.*)'$");
+  private static final Pattern LITERAL = Pattern.compile("`([^`]+)`");
+
   private static final Set<String> LISTENER_KEYS =
       Set.of(
           "spiffe.principal.listener.<listener>.allowed.ids",
@@ -63,6 +69,13 @@ class OperatorDocsTest {
     return rows;
   }
 
+  /** The values a ValidString accepts: its toString is "[a, b]" from Kafka 3.0 to 4.4. */
+  private static Set<String> validStrings(ConfigDef.Validator validator) {
+    String values = validator.toString();
+    assertTrue(values.startsWith("[") && values.endsWith("]"), values);
+    return new TreeSet<>(List.of(values.substring(1, values.length() - 1).split(",\\s*")));
+  }
+
   @Test
   void theReferenceListsEveryKeyAndNoOther() throws IOException {
     Set<String> expected = new TreeSet<>(SpiffeConfig.DEFINITION.names());
@@ -79,7 +92,14 @@ class OperatorDocsTest {
       assertNotNull(row, key.name + " is not in the reference");
       String type = key.type.name().toLowerCase(Locale.ROOT);
       if (key.validator instanceof ConfigDef.ValidString) {
-        assertTrue(row[0].startsWith("`"), key.name + ": the values, not the type: " + row[0]);
+        // An enumerated key lists its values, which must be exactly the validator's.
+        Set<String> documented = new TreeSet<>();
+        Matcher literal = LITERAL.matcher(row[0]);
+        while (literal.find()) {
+          key.validator.ensureValid(key.name, literal.group(1));
+          documented.add(literal.group(1));
+        }
+        assertEquals(validStrings(key.validator), documented, key.name);
       } else {
         assertEquals(type, row[0], key.name);
       }
@@ -99,30 +119,66 @@ class OperatorDocsTest {
     Matcher block = PROPERTIES.matcher(document());
     List<String> checked = new ArrayList<>();
     while (block.find()) {
-      Properties properties = new Properties();
-      // As Kafka reads a properties file (Utils.loadProps): backslashes are escapes.
-      properties.load(new StringReader(block.group(1)));
-      Map<String, Object> configs = new HashMap<>();
-      properties.forEach((k, v) -> configs.put((String) k, v));
-      // A fragment is checked on a minimal configuration it does not replace.
-      configs.putIfAbsent("spiffe.endpoint.socket", "unix:///run/spire/agent.sock");
-      if (!configs.containsKey("spiffe.peer.allowed.ids")
-          && !configs.containsKey("spiffe.peer.allowed.trust.domains")) {
-        configs.put("spiffe.peer.allowed.trust.domains", "example.org,k8s.example.org");
-      }
-      SpiffeConfig config = SpiffeConfig.parse(configs, Map.of());
-      PrincipalPolicy policy = PrincipalPolicy.of(config, configs);
-      if (configs.containsKey("spiffe.principal.mapping.rules")) {
-        PrincipalPolicy.Outcome outcome =
-            policy.principal(SpiffeId.parse("spiffe://k8s.example.org/ns/payments/sa/api"), null);
-        assertNotNull(outcome.principal());
-        assertEquals(
-            "Spiffe:spiffe-group:k8s.example.org:payments",
-            outcome.principal().toString(),
-            "the mapping rule example, read from a properties file: " + outcome.refusal());
-      }
+      accept(block.group(1));
       checked.add(block.group(1).lines().findFirst().orElse(""));
     }
     assertTrue(checked.size() >= 5, "too few properties examples found: " + checked);
+  }
+
+  /**
+   * The apache/kafka image's environment, as its start script turns it into server.properties
+   * (KafkaDockerWrapper.getServerConfigsFromEnv, 3.7 to 4.x): the name loses KAFKA_, is lowercased,
+   * and its _ become . (__ becomes _, ___ becomes -); the value is written as it is.
+   */
+  @Test
+  void everyImageEnvironmentExampleIsAConfigurationTheLibraryAccepts() throws IOException {
+    Matcher block = YAML.matcher(document());
+    int checked = 0;
+    while (block.find()) {
+      StringBuilder properties = new StringBuilder();
+      for (String line : block.group(1).split("\n")) {
+        Matcher variable = ENVIRONMENT.matcher(line);
+        if (variable.matches()) {
+          String key =
+              variable
+                  .group(1)
+                  .replaceFirst("KAFKA_", "")
+                  .toLowerCase(Locale.ROOT)
+                  .replace("_", ".")
+                  .replace("...", "-")
+                  .replace("..", "_");
+          properties.append(key).append('=').append(variable.group(2)).append('\n');
+          checked++;
+        }
+      }
+      accept(properties.toString());
+    }
+    assertTrue(checked >= 1, "no image environment example found");
+  }
+
+  /** Loads a properties text as Kafka loads a file, and configures the library with it. */
+  private static void accept(String text) throws IOException {
+    Properties properties = new Properties();
+    // As Kafka reads a properties file (Utils.loadProps): backslashes are escapes.
+    properties.load(new StringReader(text));
+    Map<String, Object> configs = new HashMap<>();
+    properties.forEach((k, v) -> configs.put((String) k, v));
+    // A fragment is checked on a minimal configuration it does not replace.
+    configs.putIfAbsent("spiffe.endpoint.socket", "unix:///run/spire/agent.sock");
+    if (!configs.containsKey("spiffe.peer.allowed.ids")
+        && !configs.containsKey("spiffe.peer.allowed.trust.domains")) {
+      configs.put("spiffe.peer.allowed.trust.domains", "example.org,k8s.example.org");
+    }
+    SpiffeConfig config = SpiffeConfig.parse(configs, Map.of());
+    PrincipalPolicy policy = PrincipalPolicy.of(config, configs);
+    if (configs.containsKey("spiffe.principal.mapping.rules")) {
+      PrincipalPolicy.Outcome outcome =
+          policy.principal(SpiffeId.parse("spiffe://k8s.example.org/ns/payments/sa/api"), null);
+      assertNotNull(outcome.principal());
+      assertEquals(
+          "Spiffe:spiffe-group:k8s.example.org:payments",
+          outcome.principal().toString(),
+          "the mapping rule example, read as Kafka reads it: " + outcome.refusal());
+    }
   }
 }

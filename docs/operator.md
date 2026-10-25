@@ -62,7 +62,7 @@ super.users=Spiffe:spiffe://example.org/kafka/broker;User:ANONYMOUS
 - **Host names are never checked.** `ssl.endpoint.identification.algorithm` is ignored, so a broker reached by IP address needs no IP SAN.
 - **Keystores and truststores are ignored.** `ssl.keystore.*` and `ssl.truststore.*` are logged as a mistake.
 - **TLS settings that are honoured:** `ssl.protocol`, `ssl.enabled.protocols`, `ssl.cipher.suites`, `ssl.provider` and `ssl.client.auth`.
-- **Name the listener anything but `SSL`.** The `apache/kafka` image's start script asks for JKS files for a listener named `SSL`; that is why the example uses `MTLS`.
+- **Keep `SSL` out of the end of the listener's name.** The `apache/kafka` image's start script asks for JKS files whenever `KAFKA_ADVERTISED_LISTENERS` contains `SSL://`. That catches `SSL`, but also `EXTERNAL_SSL` and `SASL_SSL`. A name such as `MTLS`, as in the example, avoids it.
 - **`User:ANONYMOUS` as a super user** is there only because the controller listener is plaintext and bound to the loopback interface. Anyone who reaches a plaintext listener is `ANONYMOUS`. With SPIFFE on the controller listener too, drop it.
 - **`spiffe.*` keys are static.** Set them in the properties file (or the image's environment), never with `kafka-configs --alter`: a running broker does not apply them.
 - **No per-listener form.** Do not write `listener.name.<listener>.spiffe.*`; it does not exist. The library refuses it when it sees it, but Kafka can drop it unseen when the same key is also set without the prefix. Per-listener principal settings have their own keys ([below](#a-listener-of-its-own)).
@@ -120,7 +120,20 @@ Kafka's authorizers match principals exactly, so ACLs for many workloads mean ei
 
 `spiffe.principal.mapping.rules` has the syntax of Kafka's `ssl.principal.mapping.rules`, applied to the whole SPIFFE ID. A `/` inside a rule's expression or replacement is written `\/`.
 
-In a properties file, write every backslash twice. Kafka reads the file with `java.util.Properties`, which treats a backslash as an escape: a rule written `\/` would reach the library as `/` and no longer parse. The environment variables of the `apache/kafka` image take the rule as it is, with single backslashes.
+In a properties file, write every backslash twice. Kafka reads the file with `java.util.Properties`, which treats a backslash as an escape: a rule written `\/` would reach the library as `/` and no longer parse.
+
+The same goes for the `apache/kafka` image's environment variables. The image writes them as they are into `server.properties`, which Kafka then reads the same way. Mind your own quoting on top of that:
+- a YAML single-quoted string, or a shell argument in single quotes, passes backslashes through unchanged;
+- double quotes in a shell turn `\\` into `\`.
+
+For example, in a Compose file:
+
+```yaml
+environment:
+  KAFKA_SPIFFE_PRINCIPAL_MAPPING_RULES: 'RULE:^spiffe:\\/\\/k8s\\.example\\.org\\/ns\\/payments\\/sa\\/.*$/spiffe-group:k8s.example.org:payments/, DEFAULT'
+```
+
+In a properties file:
 
 ```properties
 spiffe.principal.mapping.rules=RULE:^spiffe:\\/\\/k8s\\.example\\.org\\/ns\\/payments\\/sa\\/.*$/spiffe-group:k8s.example.org:payments/, DEFAULT
@@ -286,7 +299,7 @@ Every `spiffe.*` key. An unknown `spiffe.*` key is an error. Lists are comma-sep
 | `spiffe.peer.allowed.id.patterns` | list | none | Peers allowed in the handshake, by path pattern: `*` is one segment, `**` (last only) one or more |
 | `spiffe.server.allow.unauthenticated` | boolean | `false` | Let a broker run with `ssl.client.auth` other than `required` |
 | `spiffe.principal.type` | string | `Spiffe` | The type of the principals the builder makes |
-| `spiffe.principal.mapping.rules` | string | `DEFAULT` | Rules from SPIFFE ID to principal name, in the syntax of `ssl.principal.mapping.rules`; `/` inside a rule is `\/`, and `\\/` in a properties file |
+| `spiffe.principal.mapping.rules` | string | `DEFAULT` | Rules from SPIFFE ID to principal name, in the syntax of `ssl.principal.mapping.rules`; `/` inside a rule is `\/`, written `\\/` in a properties file or the image's environment |
 | `spiffe.principal.allowed.ids` | list | the peer allow-list | Peers that get a principal, by exact SPIFFE ID; others get `spiffe-unauthorized` |
 | `spiffe.principal.allowed.trust.domains` | list | the peer allow-list | Peers that get a principal, by trust domain |
 | `spiffe.principal.allowed.id.patterns` | list | the peer allow-list | Peers that get a principal, by path pattern |

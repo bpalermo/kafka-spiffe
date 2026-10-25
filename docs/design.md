@@ -154,7 +154,7 @@ At least one of the three is required, on clients and on brokers: there is no im
 | Key | Meaning | Default |
 |---|---|---|
 | `spiffe.principal.type` | The principal type: `Spiffe`, or `User` for authorizers and tools that know no other (§5) | `Spiffe` |
-| `spiffe.principal.mapping.rules` | `RULE:<regex>/<replacement>/[L\|U], ..., DEFAULT`, the syntax of `ssl.principal.mapping.rules` (parsed by Kafka's own `SslPrincipalMapper`), applied to the full SPIFFE ID. `/` separates the parts of a rule, so a `/` of the regular expression or the replacement is written `\/`. In a properties file every backslash is doubled (`\\/`), since Kafka reads the file with `java.util.Properties`. A string, not a Kafka list: regular expressions contain commas. An ID no rule maps gets the unauthorized principal | `DEFAULT` (the ID itself) |
+| `spiffe.principal.mapping.rules` | `RULE:<regex>/<replacement>/[L\|U], ..., DEFAULT`, the syntax of `ssl.principal.mapping.rules` (parsed by Kafka's own `SslPrincipalMapper`), applied to the full SPIFFE ID. `/` separates the parts of a rule, so a `/` of the regular expression or the replacement is written `\/`. In a properties file every backslash is doubled (`\\/`), since Kafka reads the file with `java.util.Properties`; so in the `apache/kafka` image's environment, which it writes into `server.properties` as it is. A string, not a Kafka list: regular expressions contain commas. An ID no rule maps gets the unauthorized principal | `DEFAULT` (the ID itself) |
 | `spiffe.principal.allowed.ids`, `.trust.domains`, `.id.patterns` | Which peers get a principal; a peer outside them gets `<type>:spiffe-unauthorized` (§5) | the peer allow-list |
 | `spiffe.principal.listener.<listener>.allowed.ids`, `.trust.domains`, `.id.patterns` | The same for one listener (its name lowercased, as in `listener.name.<listener>.`), replacing the three above there | the three above |
 
@@ -182,7 +182,7 @@ allow.everyone.if.no.acl.found=false
 super.users=Spiffe:spiffe://example.org/kafka/broker;User:ANONYMOUS
 ```
 
-`User:ANONYMOUS` is a super user only because the controller listener is plaintext and bound to the loopback interface; with SPIFFE on that listener too it goes. The listener is named `MTLS` rather than `SSL` because the `apache/kafka` image's start script asks for JKS files for a listener named `SSL`. The jar goes on the broker's class path through `CLASSPATH`, which `kafka-run-class.sh` honours, or in `libs/`.
+`User:ANONYMOUS` is a super user only because the controller listener is plaintext and bound to the loopback interface; with SPIFFE on that listener too it goes. The listener is named `MTLS` because the `apache/kafka` image's start script asks for JKS files whenever `KAFKA_ADVERTISED_LISTENERS` contains `SSL://`, which `SSL`, `EXTERNAL_SSL` and `SASL_SSL` all do. The jar goes on the broker's class path through `CLASSPATH`, which `kafka-run-class.sh` honours, or in `libs/`.
 
 A client:
 
