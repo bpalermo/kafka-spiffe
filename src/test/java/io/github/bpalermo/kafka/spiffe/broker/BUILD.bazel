@@ -134,6 +134,30 @@ HARNESSES = {
     for name, (repo, harness, _, _) in HARNESSES.items()
 ]
 
+# A cluster halfway through the move from spiffe-helper (docs/operator.md): one broker
+# switched to the library, one still on PEM files, on every cluster above, as
+# :kafka_3_9_migration_test, :kafka_3_9_zookeeper_migration_test and so on.
+[
+    kafka_version_test(
+        name = name.removesuffix("_test") + "_migration_test",
+        size = "medium",
+        srcs = ["MigrationTest.java"],
+        jvm_flags = ["-Dkafka.spiffe.cluster=io.github.bpalermo.kafka.spiffe.broker." + harness],
+        repo = repo,
+        test_classes = ["io.github.bpalermo.kafka.spiffe.broker.MigrationTest"],
+        version = KAFKA_VERSIONS[repo],
+        runtime_deps = [":%s_cluster" % name],
+        deps = [
+            ":cluster",
+            "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+            "@maven//:io_netty_netty_transport_classes_epoll",
+        ],
+    )
+    for name, (repo, harness, _, _) in HARNESSES.items()
+]
+
 # Run in a JVM of its own by the cross-version tests below, so it depends on nothing
 # but Kafka's public API: its class path there is the published jar, another Kafka
 # version's kafka-clients and slf4j-api.

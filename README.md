@@ -23,7 +23,7 @@ A broker sets the same factory together with `principal.builder.class=io.github.
 
 [docs/operator.md](docs/operator.md) covers:
 - installation, and the configuration of brokers and clients (Streams and Connect included);
-- ACLs, and moving existing ones over;
+- ACLs, and moving from spiffe-helper (or java-spiffe's JCA provider), ACLs included;
 - what to monitor, and troubleshooting;
 - verifying a release;
 - every configuration key;

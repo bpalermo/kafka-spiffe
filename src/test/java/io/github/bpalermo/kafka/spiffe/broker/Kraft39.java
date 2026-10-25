@@ -10,12 +10,16 @@ public final class Kraft39 implements BrokerCluster {
   private KafkaClusterTestKit cluster;
 
   @Override
-  public BrokerCluster start(int brokers, Map<String, String> configs) throws Exception {
+  public BrokerCluster start(
+      int brokers, Map<String, String> configs, Map<Integer, Map<String, String>> overrides)
+      throws Exception {
     TestKitNodes nodes =
         new TestKitNodes.Builder()
             .setCombined(false)
             .setNumControllerNodes(1)
             .setNumBrokerNodes(brokers)
+            // Keyed by node ID; the brokers' are 0, 1, ...
+            .setPerServerProperties(overrides)
             .build();
     KafkaClusterTestKit.Builder builder = new KafkaClusterTestKit.Builder(nodes);
     configs.forEach(builder::setConfigProp);

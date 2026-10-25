@@ -1,6 +1,6 @@
 # Operating kafka-spiffe
 
-How to run Kafka brokers and clients with kafka-spiffe: installing the jar, configuring a broker and its clients, writing ACLs for SPIFFE principals, moving existing ACLs over, and what to watch. The reasons behind each behaviour are in the [design](design.md).
+How to run Kafka brokers and clients with kafka-spiffe: installing the jar, configuring a broker and its clients, writing ACLs for SPIFFE principals, moving from spiffe-helper, and what to watch. The reasons behind each behaviour are in the [design](design.md).
 
 What you need:
 
@@ -196,29 +196,64 @@ spiffe.peer.allowed.trust.domains=example.org,k8s.example.org
 spiffe.principal.listener.internal.allowed.ids=spiffe://example.org/kafka/broker
 ```
 
-## Moving existing ACLs over
+## Moving from spiffe-helper
 
-A cluster that today authenticates the same SVIDs through files has principals of another shape, usually `User:` followed by the certificate's subject DN. Those files are PEM written by spiffe-helper and loaded as a keystore and truststore, and the principal comes from Kafka's default builder or its `ssl.principal.mapping.rules`.
+A cluster that gets its SVIDs today through spiffe-helper (PEM files that it rewrites, and a keystore reload on each rotation) moves to the library one broker at a time, then one client at a time, with no downtime. Old and switched brokers and clients work together all along, because the old certificates are SVIDs too.
 
-Switching the principal builder changes every principal at once, so add the new ACLs before the switch and remove the old ones after it:
+The one thing that changes at once is the principal. Kafka's own builder gives `User:` and the certificate's subject DN; the library gives `Spiffe:` and the SPIFFE ID. So the new ACLs come first and the old ones go last:
 
 ```mermaid
 flowchart LR
     a["List the ACLs and super.users<br/>of every current principal"] --> b["Add the same ACLs and super.users<br/>for each Spiffe: principal"]
     b --> c["Switch the brokers,<br/>one at a time"]
     c --> d["Switch the clients"]
-    d --> e["Remove the old ACLs<br/>and super.users entries"]
+    d --> e["Remove the old ACLs,<br/>super.users entries and files"]
 ```
 
-1. **List what exists:** `kafka-acls.sh --list`, and `super.users` in every broker's configuration. Write down which SPIFFE ID each old principal stands for: the workload whose SVID carried that subject.
-2. **Add the new ACLs**, one `Spiffe:<SPIFFE ID>` (or one group principal from a mapping rule) for each old principal, with the same operations and resources. Add the brokers' SPIFFE IDs to `super.users` beside the old entries. Until the last broker is switched, a broker may see another broker under either name.
-3. **Switch the brokers** one at a time, with a rolling restart:
-   - **What changes:** each broker gets the jar, `ssl.engine.factory.class`, `principal.builder.class`, the `spiffe.*` keys, and no keystore or truststore.
-   - **Old clients keep working.** Their certificates are SVIDs too, so a switched broker verifies them by SPIFFE ID and gives them `Spiffe:` principals, which the new ACLs cover.
-4. **Switch the clients**, in any order: each needs the jar and its `spiffe.*` keys instead of a keystore and truststore.
-5. **Check the authorizer's log for denials**, then remove the old ACLs and `super.users` entries.
+### What changes
 
-A broker that has not been switched yet still needs a truststore holding every trust domain its clients come from. A switched broker needs only its agent to deliver those bundles.
+| With spiffe-helper | With kafka-spiffe |
+|---|---|
+| spiffe-helper beside each broker and client, its `helper.conf` and its certificate directory | Nothing beside the process: the JVM talks to the agent's socket (`spiffe.endpoint.socket`, or `SPIFFE_ENDPOINT_SOCKET`) |
+| `ssl.keystore.*` and `ssl.key.password`: the SVID and its private key, on disk | None; the key never leaves memory |
+| `ssl.truststore.*`: the bundle file, federated bundles appended | None; the agent delivers every bundle, federated ones included |
+| A reload on every rotation (`kafka-configs --alter` of the listener's keystore, or a restart); Java clients never reload, so they restart before their SVID expires | Nothing: each new connection uses the newest SVID |
+| `ssl.endpoint.identification.algorithm=` empty, since an SVID has no DNS name | Not needed: host names are never checked |
+| Peers trusted by CA: anything the truststore's roots signed | Peers allowed by SPIFFE ID or trust domain (`spiffe.peer.allowed.*`, required) |
+| `User:<subject DN>`, shaped by `ssl.principal.mapping.rules` | `Spiffe:<SPIFFE ID>`, shaped by `spiffe.principal.mapping.rules` |
+
+### The steps
+
+1. **List what exists:** `kafka-acls.sh --list`, and `super.users` on every node, controllers included. Write down which SPIFFE ID each DN principal stands for: the workload whose SVID carries that subject.
+   - Several workloads can share one DN, for instance when every SVID carries the same subject. Each now gets a principal of its own, so each needs its own ACLs, or a mapping rule that groups them ([Grouping workloads](#grouping-workloads)).
+2. **Add the new ACLs**, one `Spiffe:<SPIFFE ID>` (or one group principal) for each old principal, with the same operations and resources. Leave the old ones in place.
+   - **`super.users`:** add the brokers' and administrators' SPIFFE IDs beside the old DN entries, on every node. It is static, so it takes a restart; on a broker it can go with that broker's switch (step 3), and on KRaft controllers, which authorize the requests a switched broker forwards under the new principals, it must be in place before the first broker is switched.
+   - **Until the last broker is switched,** a broker sees another broker, and a client, under either name: a switched broker by SPIFFE ID, an old one by DN.
+3. **Switch the brokers** one at a time, with a rolling restart:
+   - **What each one gets:** the jar, `ssl.engine.factory.class`, `principal.builder.class` and the `spiffe.*` keys ([The broker](#the-broker)), and its spiffe-helper stops. Its `ssl.keystore.*`, `ssl.truststore.*` and `ssl.principal.mapping.rules` go; left in, they are logged as a mistake and ignored.
+   - **Its peer allow-list** must cover the brokers that are not switched yet and the old clients: they connect with their SVIDs, which it verifies by SPIFFE ID.
+   - **A broker not yet switched** keeps working with the switched ones. Its truststore must hold every trust domain a client or a broker comes from, and its `ssl.endpoint.identification.algorithm` must stay empty: it checks a switched broker's certificate as it checked the old one. A switched broker presents the same kind of SVID it got through spiffe-helper, from the same agent, so the old `super.users` entries still name it there.
+   - **To roll a broker back,** restore its previous configuration and its spiffe-helper; the old ACLs are still there.
+4. **Switch the clients**, in any order: each gets the jar and its `spiffe.*` keys ([Clients](#clients)) instead of a keystore and a truststore, and its spiffe-helper stops. Clients can start before the last broker is switched: an old broker verifies a switched client's SVID against its truststore, as before.
+5. **Clean up** once every broker and client is switched:
+   - check the authorizer's log for denials of the new principals;
+   - remove the old ACLs and the DN entries of `super.users`;
+   - remove spiffe-helper and delete the PEM files: they hold private keys.
+
+### From java-spiffe's JCA provider
+
+A broker that gets its SVIDs from [java-spiffe](https://github.com/spiffe/java-spiffe)'s JCA provider has no files already: `java.security` registers the provider, and `ssl.keymanager.algorithm=Spiffe` and `ssl.trustmanager.algorithm=Spiffe` name it. The move is the same steps; what changes:
+
+- **Remove** the provider's jars from the class path, its entry in `java.security` (or `-Djava.security.properties`), `ssl.keymanager.algorithm`, `ssl.trustmanager.algorithm`, and its system properties: `ssl.spiffe.accept`, `ssl.spiffe.acceptAll`, `spiffe.newX509Source.timeout`.
+- **The peer allow-list:** `ssl.spiffe.accept`'s IDs become `spiffe.peer.allowed.ids`. `ssl.spiffe.acceptAll=true` has no equivalent; list the trust domains it accepted in `spiffe.peer.allowed.trust.domains`.
+- **The start timeout:** `spiffe.newX509Source.timeout` becomes `spiffe.startup.timeout.ms`.
+- **Principals:** the provider leaves Kafka's default builder in place, so its principals are `User:<subject DN>`, and ACLs move as above. A broker with no authorizer has none to move, and switches in one restart.
+
+```properties
+spiffe.endpoint.socket=unix:///run/spire/sockets/agent.sock
+spiffe.peer.allowed.trust.domains=example.org,k8s.example.org
+spiffe.startup.timeout.ms=120000
+```
 
 ## Watching it
 

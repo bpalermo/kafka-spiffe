@@ -1,5 +1,6 @@
 package io.github.bpalermo.kafka.spiffe.broker;
 
+import java.util.HashMap;
 import java.util.Map;
 import kafka.testkit.BrokerNodes;
 import kafka.testkit.KafkaClusterTestKit;
@@ -11,11 +12,15 @@ public final class Kraft33 implements BrokerCluster {
   private KafkaClusterTestKit cluster;
 
   @Override
-  public BrokerCluster start(int brokers, Map<String, String> configs) throws Exception {
+  public BrokerCluster start(
+      int brokers, Map<String, String> configs, Map<Integer, Map<String, String>> overrides)
+      throws Exception {
     TestKitNodes.Builder nodes = new TestKitNodes.Builder().setNumControllerNodes(1);
     for (int id = 0; id < brokers; id++) {
       // The kit would replace the listener settings of configs; a broker's overrides win.
-      nodes.addNode(BrokerNodes.withOverrides(id, configs));
+      Map<String, String> broker = new HashMap<>(configs);
+      broker.putAll(overrides.getOrDefault(id, Map.of()));
+      nodes.addNode(BrokerNodes.withOverrides(id, broker));
     }
     KafkaClusterTestKit.Builder builder = new KafkaClusterTestKit.Builder(nodes.build());
     configs.forEach(builder::setConfigProp);

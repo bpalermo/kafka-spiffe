@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. The [README](README.md) h
 
 ## What this is
 
-kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 6 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`, and in `kafka` the configuration, the engine factory and the principal builder; the published jar, its release and the operator's documentation); phase 7 is under way: the in-process broker tests, KRaft and ZooKeeper, clients across versions and the end-to-end run are done; the spiffe-helper migration is not.
+kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 7 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`, and in `kafka` the configuration, the engine factory and the principal builder; the published jar, its release and the operator's documentation; the in-process broker tests, KRaft and ZooKeeper, clients across versions, the migration from spiffe-helper and the end-to-end run); phase 8 (design section 10) is optional and not started.
 
 ## Commands
 
@@ -17,6 +17,7 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 | Tests on another JDK | `bazel test --config=jdk21 //...` (`jdk17`, `jdk21`, `jdk25`) |
 | The tests of one Kafka version | `bazel test //matrix:kafka_3_9_test` |
 | The broker tests of one Kafka version, KRaft or ZooKeeper | `bazel test //src/test/java/io/github/bpalermo/kafka/spiffe/broker:kafka_3_9_test` (`:kafka_3_9_zookeeper_test`) |
+| A cluster halfway through the move from spiffe-helper (`docs/operator.md`) | `bazel test //src/test/java/io/github/bpalermo/kafka/spiffe/broker:kafka_3_9_migration_test` (`:kafka_3_9_zookeeper_migration_test`, …) |
 | A client of one Kafka version against a broker of another | `bazel test //src/test/java/io/github/bpalermo/kafka/spiffe/broker:client_3_0_broker_4_4_test` (`:client_4_4_broker_3_9_test`) |
 | The published jar, POM, sources and javadoc | `bazel build //:kafka-spiffe-maven-artifact //:kafka-spiffe-pom //:kafka-spiffe-maven-source //:kafka-spiffe-docs` |
 | Format (rewrites files) | `bazel run //:format` |
@@ -37,7 +38,7 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 | `src/main/java/io/github/bpalermo/kafka/spiffe/{id,x509,workload,kafka,metrics}` | The library, one Bazel package per Java package (design section 3) |
 | `src/test/java/...` | Their tests, one `java_junit_test` per package; `testing` holds the shared test PKI and handshake helpers |
 | `matrix/` | One test per Kafka version, run against that version's jars |
-| `src/test/java/.../broker/` | The in-process broker tests, one test on every cluster: the test-kit harness of each KRaft line (`src/test/java/kafka/testkit` holds the one class 3.3's kit needs in its own package) and the ZooKeeper one of 3.0 and 3.9; and the clients across versions, whose client (`ClientDriver`) runs in a JVM of its own on the published jar and the other version's `kafka-clients` |
+| `src/test/java/.../broker/` | The in-process broker tests, one test on every cluster: the test-kit harness of each KRaft line (`src/test/java/kafka/testkit` holds the one class 3.3's kit needs in its own package) and the ZooKeeper one of 3.0 and 3.9; `MigrationTest`, a switched broker beside one on spiffe-helper's PEM files, on every cluster; and the clients across versions, whose client (`ClientDriver`) runs in a JVM of its own on the published jar and the other version's `kafka-clients` |
 | `bazel/java` | `JAVACOPTS`, the JUnit macro (`junit.bzl`), the per-Kafka-version macro (`kafka.bzl`) |
 | `bazel/maven` | Maven lockfiles, and the provided (neverlink) and Netty epoll (test-only) targets |
 | `bazel/lint`, `bazel/format` | PMD aspect and the formatters |
