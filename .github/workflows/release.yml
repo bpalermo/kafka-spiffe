@@ -1,0 +1,188 @@
+name: release
+
+# A version tag releases the library under that number:
+#
+#   git tag v1.2.3 <main's tip> && git push origin v1.2.3
+#
+# The tag must point at main's tip. Nothing is committed: the version is written
+# into each job's checkout (scripts/set-version.sh) and main stays at 0.0.0-dev.
+#
+# Jobs: plan (the version, and the tag checked) -> verify (every test, with the
+# version in place) -> maven (Maven Central) and github-release (the jar, signed
+# with cosign, as a release asset).
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Read the version from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Refuses anything but X.Y.Z.
+          scripts/set-version.sh "${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Refuse a tag that is not main's tip
+        run: |
+          set -euo pipefail
+          main="$(git rev-parse origin/main)"
+          if [ "${GITHUB_SHA}" != "${main}" ]; then
+            echo "::error::${GITHUB_REF_NAME} is ${GITHUB_SHA}, main is ${main}" >&2
+            exit 1
+          fi
+
+  # Every test of CI, with the release version in place: the build, unit and
+  # version tests, the jar beside a broker's libs/, and the end-to-end tests
+  # against a real SPIRE.
+  verify:
+    needs: plan
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: scripts/set-version.sh "${RELEASE_VERSION}"
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: true
+          disk-cache: release-verify
+          repository-cache: true
+          cache-save: false
+      - run: bazel test --config=ci //...
+      - run: >-
+          bazel test --config=ci
+          //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_3_0_test
+          //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_4_4_test
+      - run: bazel test --config=ci --config=e2e //...
+
+  # io.github.bpalermo:kafka-spiffe on Maven Central.
+  #
+  # Off until the repository variable PUBLISH_MAVEN is `true`. It needs, in the
+  # `release` environment: MAVEN_USER and MAVEN_PASSWORD (a Central Portal
+  # token); GPG_PRIVATE_KEY (the secret key ring, `gpg --export-secret-keys`,
+  # base64-encoded) and GPG_PASSPHRASE. Signing is in memory
+  # (USE_IN_MEMORY_PGP_KEYS): the publisher's gpg mode never passes a
+  # passphrase, so it cannot use a protected key on a runner. The signing-check
+  # workflow tests those two secrets without publishing.
+  #
+  # The upload goes to the Portal's staging-compatible endpoint. A deployment
+  # made there reaches the Portal only when this job asks for it (the last
+  # step), and with publishing_type=user_managed it waits there, validated, for
+  # someone to press Publish.
+  maven:
+    if: vars.PUBLISH_MAVEN == 'true'
+    needs: [plan, verify]
+    environment: release
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      STAGING: https://ossrh-staging-api.central.sonatype.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: scripts/set-version.sh "${RELEASE_VERSION}"
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: true
+          disk-cache: release-maven
+          repository-cache: true
+          cache-save: false
+      # Built before any credential exists on the runner.
+      - run: bazel build --config=ci //:kafka-spiffe.publish
+      - name: Upload
+        env:
+          MAVEN_REPO: ${{ env.STAGING }}/service/local/staging/deploy/maven2/
+          MAVEN_USER: ${{ secrets.MAVEN_USER }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          USE_IN_MEMORY_PGP_KEYS: "true"
+          PGP_SIGNING_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          PGP_SIGNING_PWD: ${{ secrets.GPG_PASSPHRASE }}
+        run: bazel run --config=ci //:kafka-spiffe.publish
+      # The staging API keeps an upload under the token, the namespace and the
+      # runner's address, so this runs in the same job as the upload.
+      - name: Hand the deployment to the Portal
+        env:
+          MAVEN_USER: ${{ secrets.MAVEN_USER }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          token="$(printf '%s:%s' "${MAVEN_USER}" "${MAVEN_PASSWORD}" | base64 -w0)"
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer ${token}" \
+            "${STAGING}/manual/upload/defaultRepository/io.github.bpalermo?publishing_type=user_managed"
+          echo
+          echo "kafka-spiffe ${RELEASE_VERSION} is in the Central Portal, waiting to be published."
+
+  # The GitHub release: the jar and its POM, each with a cosign signature
+  # (keyless, from this workflow's identity), and notes generated from the pull
+  # requests merged since the previous tag.
+  github-release:
+    needs: [plan, verify]
+    permissions:
+      contents: write
+      id-token: write
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: scripts/set-version.sh "${RELEASE_VERSION}"
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: true
+          disk-cache: release-github
+          repository-cache: true
+          cache-save: false
+      - name: Build the jar and POM
+        run: |
+          set -euo pipefail
+          bazel build --config=ci //:kafka-spiffe-maven-artifact //:kafka-spiffe-pom
+          mkdir dist
+          cp "$(bazel cquery --config=ci //:kafka-spiffe-maven-artifact --output=files 2>/dev/null)" "dist/kafka-spiffe-${RELEASE_VERSION}.jar"
+          cp "$(bazel cquery --config=ci //:kafka-spiffe-pom --output=files 2>/dev/null)" "dist/kafka-spiffe-${RELEASE_VERSION}.pom"
+          ls -l dist
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Sign
+        run: |
+          set -euo pipefail
+          for file in dist/*.jar dist/*.pom; do
+            cosign sign-blob --yes --bundle "${file}.sigstore.json" "${file}"
+          done
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --generate-notes \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "io.github.bpalermo:kafka-spiffe:${RELEASE_VERSION}. Each file has a cosign bundle (.sigstore.json); verify with cosign verify-blob --bundle <file>.sigstore.json --certificate-identity https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF} --certificate-oidc-issuer https://token.actions.githubusercontent.com <file>"

@@ -11,3 +11,14 @@ sh_test(
         "//bazel:version.bzl",
     ],
 )
+
+sh_test(
+    name = "maven_layout_test",
+    size = "small",
+    srcs = ["maven_layout_test.sh"],
+    args = ["$(rootpath //:kafka-spiffe.publish)"],
+    data = [
+        "//:kafka-spiffe.publish",
+        "//bazel:version.bzl",
+    ],
+)
