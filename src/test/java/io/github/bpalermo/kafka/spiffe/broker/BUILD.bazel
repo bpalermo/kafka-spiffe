@@ -1,0 +1,100 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//bazel/java:defs.bzl", "JAVACOPTS")
+load("//bazel/java:kafka.bzl", "KAFKA_VERSIONS", "kafka_version_test")
+
+# The in-process KRaft broker tests (design section 9, "Kafka"): one target per KRaft
+# version of the CI matrix, //src/test/java/io/github/bpalermo/kafka/spiffe/broker:kafka_3_3_test
+# ... :kafka_4_4_test. The test compiles against kafka-clients 3.0.0, like the library, and
+# reaches the version's test kit only through KraftCluster; each line's implementation is
+# compiled against that line's jars and found by name at run time.
+#
+# Each starts a cluster of a controller and two brokers in about ten seconds, so they
+# run with the rest of //... (the CI build and jdk jobs: JDK 17, 21 and 25).
+
+java_library(
+    name = "cluster",
+    testonly = True,
+    srcs = ["KraftCluster.java"],
+    javacopts = JAVACOPTS,
+)
+
+# Kafka line -> (the implementation, the libraries it compiles against, the rest of
+# the test kit's class path: the artifacts of design section 9's table).
+HARNESSES = {
+    "kafka_3_3": (
+        "Kraft33",
+        [
+            "//src/test/java/kafka/testkit",
+            "@kafka_3_3//:org_apache_kafka_kafka_2_13_test",
+        ],
+        [
+            "@kafka_3_3//:org_apache_kafka_kafka_2_13",
+            "@kafka_3_3//:org_apache_kafka_kafka_clients_test",
+            "@kafka_3_3//:org_apache_kafka_kafka_metadata_test",
+            "@kafka_3_3//:org_apache_kafka_kafka_server_common_test",
+        ],
+    ),
+    "kafka_3_9": (
+        "Kraft39",
+        [
+            "@kafka_3_9//:org_apache_kafka_kafka_2_13_test",
+        ],
+        [
+            "@kafka_3_9//:org_apache_kafka_kafka_2_13",
+            "@kafka_3_9//:org_apache_kafka_kafka_clients_test",
+            "@kafka_3_9//:org_apache_kafka_kafka_server_common_test",
+        ],
+    ),
+    "kafka_4_0": (
+        "Kraft4",
+        [
+            "@kafka_4_0//:org_apache_kafka_kafka_test_common_runtime",
+        ],
+        [
+            "@kafka_4_0//:org_apache_kafka_kafka_2_13",
+        ],
+    ),
+    "kafka_4_4": (
+        "Kraft4",
+        [
+            "@kafka_4_4//:org_apache_kafka_kafka_test_common_runtime",
+        ],
+        [
+            "@kafka_4_4//:org_apache_kafka_kafka_2_13",
+            "@kafka_4_4//:org_apache_kafka_kafka_clients_test_fixtures",
+            "@kafka_4_4//:org_bouncycastle_bcpkix_jdk18on",
+        ],
+    ),
+}
+
+[
+    java_library(
+        name = repo + "_cluster",
+        testonly = True,
+        srcs = [harness + ".java"],
+        javacopts = JAVACOPTS,
+        runtime_deps = runtime,
+        deps = [":cluster"] + deps,
+    )
+    for repo, (harness, deps, runtime) in HARNESSES.items()
+]
+
+[
+    kafka_version_test(
+        size = "medium",
+        srcs = ["KraftBrokerTest.java"],
+        jvm_flags = ["-Dkafka.spiffe.cluster=io.github.bpalermo.kafka.spiffe.broker." + HARNESSES[repo][0]],
+        repo = repo,
+        test_classes = ["io.github.bpalermo.kafka.spiffe.broker.KraftBrokerTest"],
+        version = KAFKA_VERSIONS[repo],
+        runtime_deps = [":%s_cluster" % repo],
+        deps = [
+            ":cluster",
+            "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+            "@maven//:io_netty_netty_transport_classes_epoll",
+        ],
+    )
+    for repo in HARNESSES
+]

@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Proves a Kafka version's repository is the one on the run time class path: the version recorded
  * in the kafka-clients jar is the one the target was declared for. No broker is started here;
- * broker tests go in this package's neighbours, one {@code kafka_version_test} per version.
+ * broker tests are in {@code src/test/java/.../broker}, one {@code kafka_version_test} per version.
  */
 class KafkaVersionTest {
   @Test
