@@ -322,4 +322,54 @@ class SpiffeSslEngineFactoryTest {
     assertEquals(0, registry.size());
     assertNotEquals(null, factory.reconfigurableConfigs());
   }
+
+  @Test
+  void emptyProtocolAndCipherListsMeanTheJdkDefaultsAsInKafkasOwnFactory() {
+    Map<String, Object> configs = clientConfigs();
+    configs.put(SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG, List.of());
+    configs.put(SslConfigs.SSL_CIPHER_SUITES_CONFIG, "");
+    SSLEngine engine = factory(configs).createClientSslEngine("10.0.0.1", 9093, "https");
+    SSLEngine plain = factory(clientConfigs()).createClientSslEngine("10.0.0.1", 9093, "https");
+    assertEquals(List.of(plain.getEnabledProtocols()), List.of(engine.getEnabledProtocols()));
+    assertEquals(List.of(plain.getEnabledCipherSuites()), List.of(engine.getEnabledCipherSuites()));
+  }
+
+  @Test
+  void aStaleCallerCannotRollTheFactoryBack() throws Exception {
+    SpiffeSslEngineFactory client = factory(clientConfigs());
+    SpiffeSslEngineFactory broker = factory(brokerConfigs());
+    X509Certificate first = leaf(connect(client, broker).client().getPeerCertificates());
+    for (int i = 0; i < 3; i++) {
+      brokerAgent.publish(response(BROKER_CA.svid("/broker"), BROKER_CA));
+    }
+    // Rotations arrive while engines are made from other threads; whatever the interleaving, every
+    // engine made after the last rotation is installed presents the newest SVID.
+    java.util.concurrent.ExecutorService pool =
+        java.util.concurrent.Executors.newFixedThreadPool(4);
+    try {
+      for (int i = 0; i < 50; i++) {
+        pool.submit(() -> broker.createServerSslEngine("10.0.0.2", 50000));
+      }
+    } finally {
+      pool.shutdown();
+      assertTrue(pool.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS));
+    }
+    X509Certificate[] newest = new X509Certificate[1];
+    eventually(
+        () -> {
+          try {
+            X509Certificate now = leaf(connect(client, broker).client().getPeerCertificates());
+            boolean stable =
+                now.equals(leaf(connect(client, broker).client().getPeerCertificates()));
+            newest[0] = now;
+            return stable && !now.equals(first);
+          } catch (SSLException e) {
+            throw new AssertionError(e);
+          }
+        },
+        "the newest SVID");
+    for (int i = 0; i < 10; i++) {
+      assertEquals(newest[0], leaf(connect(client, broker).client().getPeerCertificates()));
+    }
+  }
 }

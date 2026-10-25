@@ -237,8 +237,17 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
     return current;
   }
 
-  /** Builds the JDK context of a new snapshot; a failure keeps the one in use. */
-  private synchronized void rebuild(X509Context context) {
+  /**
+   * Builds the JDK context of the source's newest snapshot; a failure keeps the one in use.
+   *
+   * <p>{@code offered} is what the caller saw, which may be stale by the time the lock is taken: a
+   * caller that read one rotation and paused while the listener installed it and the next must not
+   * roll the factory back. So the snapshot built is the source's newest, read under the lock, and
+   * {@code offered} is used only once the source is gone.
+   */
+  private synchronized void rebuild(X509Context offered) {
+    X509MaterialSource held = source;
+    X509Context context = held == null ? offered : held.current();
     Snapshot current = snapshot;
     if (current != null && current.context() == context) {
       return;
@@ -261,6 +270,8 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
     SSLParameters parameters = engine.getSSLParameters();
     // Peers are verified by SPIFFE ID, never by host name, whatever Kafka asked for.
     parameters.setEndpointIdentificationAlgorithm(null);
+    // An empty list means the JDK's defaults, as in Kafka's own DefaultSslEngineFactory (3.0 to
+    // 4.4), so that this factory replaces it without changing what an empty setting means.
     if (!enabledProtocols.isEmpty()) {
       parameters.setProtocols(enabledProtocols.toArray(String[]::new));
     }
