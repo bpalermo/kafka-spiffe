@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. The [README](README.md) h
 
 ## What this is
 
-kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 1 (the build) and 2 (`id`, `x509`) are done; `workload`, `kafka` and `metrics` hold placeholders until their phases.
+kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 3 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`); `kafka` holds a placeholder until phase 4.
 
 ## Commands
 
@@ -23,7 +23,8 @@ Everything goes through Bazel (pinned in `.bazelversion`; the JDKs come from Baz
 
 - `--config=ci` adds the linters as failures and refuses lockfile drift. Run it before pushing: a plain `bazel test //...` passes on code CI rejects.
 - `--config=llm` gives plain output with verbose failures.
-- Tests tagged `e2e` are skipped by `bazel test //...`; `--config=e2e` selects them.
+- Tests tagged `e2e` are skipped by `bazel test //...`; `--config=e2e` selects them. They start a real SPIRE server and agent with Testcontainers (`//src/test/java/io/github/bpalermo/kafka/spiffe/testing:spire`, images pinned by digest), so they need Docker, and run outside the sandbox (`no-sandbox`, `requires-network`). CI runs them in the `e2e` job.
+- **The recorded SPIRE response.** `src/test/java/io/github/bpalermo/kafka/spiffe/workload/testdata/spire-x509-svid-response.bin` is one real `FetchX509SVID` response (a throwaway trust domain's SVID, key and bundle), which `SpireFixtureTest` checks without Docker. To refresh it, after a SPIRE upgrade for example: `bazel test --config=e2e //src/test/java/io/github/bpalermo/kafka/spiffe/workload:spire_e2e_test`, then copy `bazel-testlogs/src/test/java/io/github/bpalermo/kafka/spiffe/workload/spire_e2e_test/test.outputs/spire-x509-svid-response.bin` over it.
 
 ## Layout
 

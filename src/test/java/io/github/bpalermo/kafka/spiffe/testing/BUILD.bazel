@@ -39,3 +39,16 @@ java_library(
         "@maven//:io_netty_netty_transport_native_unix_common",
     ],
 )
+
+# A real SPIRE server and agent in containers (Testcontainers), for e2e tests.
+java_library(
+    name = "spire",
+    testonly = True,
+    srcs = ["Spire.java"],
+    javacopts = JAVACOPTS,
+    visibility = ["//src/test:__subpackages__"],
+    deps = [
+        "@maven//:com_github_docker_java_docker_java_api",
+        "@maven//:org_testcontainers_testcontainers",
+    ],
+)
