@@ -1,0 +1,325 @@
+package io.github.bpalermo.kafka.spiffe.kafka;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.github.bpalermo.kafka.spiffe.testing.FakeWorkloadApi;
+import io.github.bpalermo.kafka.spiffe.testing.Handshake;
+import io.github.bpalermo.kafka.spiffe.testing.TestPki;
+import io.github.bpalermo.kafka.spiffe.workload.X509SourceRegistry;
+import io.netty.channel.epoll.Epoll;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.cert.X509Certificate;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
+import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.config.SslConfigs;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Engine pairs, no broker: a broker's and a client's factory, each on a fake Workload API of its
+ * own, handshaking in memory (design, section 9).
+ */
+class SpiffeSslEngineFactoryTest {
+
+  private static final TestPki.Authority BROKER_CA = TestPki.root("example.org");
+  private static final TestPki.Authority CLIENT_CA = TestPki.root("k8s.example.org");
+  private static final Duration WAIT = Duration.ofSeconds(10);
+
+  /** A clock a test moves. */
+  private static final class MovableClock extends Clock {
+    private volatile Instant now = TestPki.NOW;
+
+    void set(Instant instant) {
+      now = instant;
+    }
+
+    @Override
+    public Instant instant() {
+      return now;
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return this;
+    }
+  }
+
+  private final MovableClock clock = new MovableClock();
+  private Path directory;
+  private FakeWorkloadApi brokerAgent;
+  private FakeWorkloadApi clientAgent;
+  private X509SourceRegistry registry;
+  private final List<SpiffeSslEngineFactory> factories = new java.util.ArrayList<>();
+
+  @BeforeEach
+  void agents() throws Exception {
+    Assumptions.assumeTrue(Epoll.isAvailable(), "the fake Workload API needs Netty's epoll");
+    directory = Files.createTempDirectory(Path.of("/tmp"), "ef");
+    brokerAgent = FakeWorkloadApi.start(directory.resolve("broker.sock"));
+    clientAgent = FakeWorkloadApi.start(directory.resolve("client.sock"));
+    brokerAgent.publish(response(BROKER_CA.svid("/broker"), BROKER_CA));
+    clientAgent.publish(response(CLIENT_CA.svid("/ns/a/sa/b"), CLIENT_CA));
+    registry = new X509SourceRegistry(clock);
+  }
+
+  @AfterEach
+  void stop() throws Exception {
+    factories.forEach(SpiffeSslEngineFactory::close);
+    if (brokerAgent != null) {
+      brokerAgent.close();
+      clientAgent.close();
+      Files.deleteIfExists(directory);
+    }
+  }
+
+  /** A response with both trust domains' bundles, as federated agents deliver them. */
+  private static FakeWorkloadApi.Response response(TestPki.Issued issued, TestPki.Authority own) {
+    TestPki.Authority other = own == BROKER_CA ? CLIENT_CA : BROKER_CA;
+    String otherDomain = own == BROKER_CA ? "k8s.example.org" : "example.org";
+    return new FakeWorkloadApi.Response()
+        .svid(FakeWorkloadApi.Svid.of(issued, own))
+        .federated("spiffe://" + otherDomain, List.of(other.certificate()));
+  }
+
+  private SpiffeSslEngineFactory factory(Map<String, Object> configs) {
+    SpiffeSslEngineFactory factory =
+        new SpiffeSslEngineFactory(domain -> registry, clock, Map.of());
+    factory.configure(configs);
+    factories.add(factory);
+    return factory;
+  }
+
+  private Map<String, Object> brokerConfigs() {
+    Map<String, Object> configs = new HashMap<>();
+    configs.put("spiffe.endpoint.socket", "unix://" + brokerAgent.socket());
+    configs.put("spiffe.peer.allowed.trust.domains", "k8s.example.org");
+    configs.put("spiffe.peer.allowed.ids", "spiffe://example.org/broker");
+    configs.put("ssl.client.auth", "required");
+    configs.put(SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG, "https");
+    configs.put("spiffe.startup.timeout.ms", "10000");
+    return configs;
+  }
+
+  private Map<String, Object> clientConfigs() {
+    Map<String, Object> configs = new HashMap<>();
+    configs.put("spiffe.endpoint.socket", "unix://" + clientAgent.socket());
+    configs.put("spiffe.peer.allowed.ids", "spiffe://example.org/broker");
+    configs.put(SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG, "https");
+    configs.put("spiffe.startup.timeout.ms", "10000");
+    return configs;
+  }
+
+  private static Handshake.Sessions connect(
+      SpiffeSslEngineFactory client, SpiffeSslEngineFactory broker) throws SSLException {
+    return Handshake.run(
+        client.createClientSslEngine("10.0.0.1", 9093, "https"),
+        broker.createServerSslEngine("10.0.0.2", 50000));
+  }
+
+  private static X509Certificate leaf(java.security.cert.Certificate[] chain) {
+    return (X509Certificate) chain[0];
+  }
+
+  private static void eventually(java.util.function.BooleanSupplier condition, String what)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + WAIT.toNanos();
+    while (!condition.getAsBoolean()) {
+      if (System.nanoTime() > deadline) {
+        throw new AssertionError("timed out waiting for " + what);
+      }
+      Thread.sleep(10);
+    }
+  }
+
+  @Test
+  void aClientAndABrokerVerifyEachOtherBySpiffeId() throws Exception {
+    Handshake.Sessions sessions = connect(factory(clientConfigs()), factory(brokerConfigs()));
+    assertTrue(
+        leaf(sessions.client().getPeerCertificates())
+            .getSubjectAlternativeNames()
+            .toString()
+            .contains("spiffe://example.org/broker"));
+    assertTrue(
+        leaf(sessions.server().getPeerCertificates())
+            .getSubjectAlternativeNames()
+            .toString()
+            .contains("spiffe://k8s.example.org/ns/a/sa/b"));
+  }
+
+  @Test
+  void aBrokerOutsideTheClientsAllowListIsRefused() {
+    Map<String, Object> client = clientConfigs();
+    client.put("spiffe.peer.allowed.ids", "spiffe://example.org/other-broker");
+    SpiffeSslEngineFactory clientFactory = factory(client);
+    SpiffeSslEngineFactory brokerFactory = factory(brokerConfigs());
+    assertThrows(SSLException.class, () -> connect(clientFactory, brokerFactory));
+  }
+
+  @Test
+  void aClientOutsideTheBrokersAllowListIsRefused() {
+    Map<String, Object> broker = brokerConfigs();
+    broker.put("spiffe.peer.allowed.trust.domains", "other.example.org");
+    SpiffeSslEngineFactory clientFactory = factory(clientConfigs());
+    SpiffeSslEngineFactory brokerFactory = factory(broker);
+    assertThrows(SSLException.class, () -> connect(clientFactory, brokerFactory));
+  }
+
+  @Test
+  void aRotationTakesEffectOnTheNextHandshakeWithoutRebuildingAndOpenEnginesKeepTheirs()
+      throws Exception {
+    SpiffeSslEngineFactory client = factory(clientConfigs());
+    SpiffeSslEngineFactory broker = factory(brokerConfigs());
+    X509Certificate before = leaf(connect(client, broker).client().getPeerCertificates());
+
+    SSLEngine openedBefore = broker.createServerSslEngine("10.0.0.2", 50001);
+    brokerAgent.publish(response(BROKER_CA.svid("/broker"), BROKER_CA));
+    eventually(
+        () -> {
+          try {
+            return !leaf(connect(client, broker).client().getPeerCertificates()).equals(before);
+          } catch (SSLException e) {
+            throw new AssertionError(e);
+          }
+        },
+        "the broker to present its rotated SVID");
+
+    X509Certificate fromOldEngine =
+        leaf(
+            Handshake.run(client.createClientSslEngine("10.0.0.1", 9093, "https"), openedBefore)
+                .client()
+                .getPeerCertificates());
+    assertEquals(before, fromOldEngine);
+  }
+
+  @Test
+  void theInterBrokerValidationHandshakeNeedsTheBrokersOwnIdAllowed() throws Exception {
+    SpiffeSslEngineFactory broker = factory(brokerConfigs());
+    Handshake.run(broker.createClientSslEngine("", 0, null), broker.createServerSslEngine("", 0));
+
+    Map<String, Object> withoutItself = brokerConfigs();
+    withoutItself.remove("spiffe.peer.allowed.ids");
+    SpiffeSslEngineFactory stranger = factory(withoutItself);
+    assertThrows(
+        SSLException.class,
+        () ->
+            Handshake.run(
+                stranger.createClientSslEngine("", 0, null),
+                stranger.createServerSslEngine("", 0)));
+  }
+
+  @Test
+  void aBrokerRequiresClientCertificatesUnlessToldOtherwise() {
+    Map<String, Object> none = brokerConfigs();
+    none.put("ssl.client.auth", "none");
+    assertThrows(ConfigException.class, () -> factory(none));
+
+    none.put("spiffe.server.allow.unauthenticated", "true");
+    SSLEngine relaxed = factory(none).createServerSslEngine("", 0);
+    assertFalse(relaxed.getNeedClientAuth());
+
+    Map<String, Object> requested = brokerConfigs();
+    requested.put("ssl.client.auth", "requested");
+    requested.put("spiffe.server.allow.unauthenticated", "true");
+    assertTrue(factory(requested).createServerSslEngine("", 0).getWantClientAuth());
+
+    assertTrue(factory(brokerConfigs()).createServerSslEngine("", 0).getNeedClientAuth());
+  }
+
+  @Test
+  void enginesNeverIdentifyTheEndpointAndUseTheConfiguredProtocols() {
+    Map<String, Object> configs = clientConfigs();
+    configs.put(SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG, List.of("TLSv1.3"));
+    configs.put(SslConfigs.SSL_PROTOCOL_CONFIG, "TLSv1.3");
+    SSLEngine engine = factory(configs).createClientSslEngine("10.0.0.1", 9093, "https");
+    assertNull(engine.getSSLParameters().getEndpointIdentificationAlgorithm());
+    assertEquals(List.of("TLSv1.3"), List.of(engine.getEnabledProtocols()));
+    assertTrue(engine.getUseClientMode());
+  }
+
+  @Test
+  void startupFailsAfterTheTimeoutAndReleasesTheSource() throws Exception {
+    Path silent = directory.resolve("silent.sock");
+    try (FakeWorkloadApi silentAgent = FakeWorkloadApi.start(silent)) {
+      assertEquals(silent, silentAgent.socket());
+      Map<String, Object> configs = clientConfigs();
+      configs.put("spiffe.endpoint.socket", "unix://" + silent);
+      configs.put("spiffe.startup.timeout.ms", "300");
+      SpiffeSslEngineFactory factory =
+          new SpiffeSslEngineFactory(domain -> registry, clock, Map.of());
+      KafkaException e = assertThrows(KafkaException.class, () -> factory.configure(configs));
+      assertTrue(e.getMessage().contains("no X.509 SVID"), e.getMessage());
+      assertEquals(0, registry.size());
+    }
+  }
+
+  @Test
+  void anExpiredSvidIsPresentedByDefaultOrRefusedUnderFail() {
+    SpiffeSslEngineFactory present = factory(clientConfigs());
+    Map<String, Object> failing = clientConfigs();
+    failing.put("spiffe.svid.expired", "fail");
+    SpiffeSslEngineFactory fail = factory(failing);
+    clock.set(TestPki.NOW.plus(Duration.ofHours(1)));
+    present.createClientSslEngine("10.0.0.1", 9093, "https");
+    KafkaException e =
+        assertThrows(
+            KafkaException.class, () -> fail.createClientSslEngine("10.0.0.1", 9093, "https"));
+    assertTrue(e.getMessage().contains("expired"), e.getMessage());
+  }
+
+  @Test
+  void factoriesShareTheSourceAndRebuildOnlyForTheReconfigurableKeys() {
+    SpiffeSslEngineFactory one = factory(brokerConfigs());
+    factory(brokerConfigs());
+    assertEquals(1, registry.size());
+
+    Map<String, Object> next = new HashMap<>(brokerConfigs());
+    assertFalse(one.shouldBeRebuilt(next));
+    next.put("spiffe.peer.allowed.ids", "spiffe://example.org/changed");
+    assertFalse(one.shouldBeRebuilt(next), "spiffe.* keys are not reconfigurable");
+    next.put(SslConfigs.SSL_CIPHER_SUITES_CONFIG, List.of("TLS_AES_128_GCM_SHA256"));
+    assertTrue(one.shouldBeRebuilt(next));
+
+    Map<String, Object> spelled = new HashMap<>(brokerConfigs());
+    spelled.put("ssl.client.auth", " REQUIRED ");
+    assertFalse(one.shouldBeRebuilt(spelled));
+    spelled.put("ssl.client.auth", "requested");
+    assertTrue(one.shouldBeRebuilt(spelled));
+
+    assertEquals(SpiffeSslEngineFactory.RECONFIGURABLE, one.reconfigurableConfigs());
+    assertNull(one.keystore());
+    assertNull(one.truststore());
+  }
+
+  @Test
+  void closingReleasesTheSource() {
+    SpiffeSslEngineFactory factory = factory(clientConfigs());
+    assertEquals(1, registry.size());
+    factory.close();
+    factory.close();
+    assertEquals(0, registry.size());
+    assertNotEquals(null, factory.reconfigurableConfigs());
+  }
+}

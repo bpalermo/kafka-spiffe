@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. The [README](README.md) h
 
 ## What this is
 
-kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 3 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`); `kafka` holds a placeholder until phase 4.
+kafka-spiffe is a Java library that gives Apache Kafka brokers and clients, 3.0 and later, SPIFFE mutual TLS without files: X.509-SVIDs from the Workload API held in memory and rotated live, peers verified by SPIFFE ID, SPIFFE IDs as Kafka principals. Phases 0 to 4 are done (the build, `id`, `x509`, `workload`, `workload.h2`, `metrics`, and in `kafka` the configuration and the engine factory); the principal builder is phase 5.
 
 ## Commands
 

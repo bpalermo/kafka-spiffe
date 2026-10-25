@@ -125,7 +125,7 @@ Every key starts with `spiffe.`. They are read from the map Kafka passes to `con
 
 | Key | Meaning | Default |
 |---|---|---|
-| `spiffe.endpoint.socket` | `unix:///path` of the Workload API. Only `unix:` is accepted | `$SPIFFE_ENDPOINT_SOCKET` |
+| `spiffe.endpoint.socket` | `unix:///path` (or `unix:/path`) of the Workload API, an absolute path. Nothing but `unix:` is accepted | `$SPIFFE_ENDPOINT_SOCKET` |
 | `spiffe.svid.hint` | Pick the SVID with this Workload API hint | the first SVID |
 | `spiffe.svid.id` | Pick the SVID with this SPIFFE ID | the first SVID |
 | `spiffe.startup.timeout.ms` | How long `configure()` waits for the first SVID; `-1` waits for ever, `0` only accepts a source that is already warm | 120000 |
@@ -141,7 +141,7 @@ Every key starts with `spiffe.`. They are read from the map Kafka passes to `con
 | `spiffe.peer.allowed.trust.domains` | Any ID of these trust domains |
 | `spiffe.peer.allowed.id.patterns` | Path globs, such as `spiffe://k8s.example.org/ns/*/sa/**`: `*` is one whole segment, `**` (last only) one or more trailing segments, and the trust domain is exact. `web-*` is refused, not matched literally |
 
-At least one of the three is required, on clients and on brokers: there is no implicit "anything a bundle vouches for". A broker also requires `ssl.client.auth=required`, unless `spiffe.server.allow.unauthenticated=true`.
+At least one of the three is required, on clients and on brokers: there is no implicit "anything a bundle vouches for". A broker also requires `ssl.client.auth=required`, unless `spiffe.server.allow.unauthenticated=true`; only a broker's configuration has `ssl.client.auth`, so a client's factory is not affected, and a server engine of a factory without it requires a client certificate. `spiffe.principal.listener.<listener>.*` keys are accepted by their shape (`allowed.ids`, `allowed.trust.domains`, `allowed.id.patterns`); any other `spiffe.*` key not in the tables is an error.
 
 ### TLS
 
@@ -373,7 +373,7 @@ Each Kafka version is its own `maven.install` repository, so the tests of one ve
 1. The repository: `MODULE.bazel` (one Maven repository per Kafka version), `.bazelrc` (Java 17, the JDK matrix), lint, the JUnit macro, CI, `AGENTS.md`.
 2. `id` and `x509`, with their tests. Done.
 3. `workload` and `workload.h2`: HTTP/2 and HPACK, the gRPC stream, the wire reader, `X509Source`, the registry, the fake Workload API (grpc-java, test-only), the Testcontainers SPIRE harness and the recorded real-SVID fixtures, backoff and expiry, JMX. The Netty and gRPC artifacts leave the library's dependencies (they stay, test-only, for the fake). Done.
-4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests.
+4. `SpiffeSslEngineFactory`: client and server, configuration, engine-pair and rotation tests. Done: each factory keeps the JDK context of the newest snapshot (rebuilt on the source's thread, and checked against the source when an engine is made, so no update is missed), shares its source with the process's other factories, and is tested in Kafka's own `SslFactory` (3.0) including the inter-broker validation handshake; the configuration and engine-pair tests run on every Kafka version of the matrix.
 5. `SpiffePrincipalBuilder`: serde, mapping rules, per-listener policy, an authorizer test.
 6. The jar and its test, publishing, the operator's documentation (broker and client configuration, ACL migration).
 7. End to end with federated SPIRE, on phase 3's Testcontainers harness with an `apache/kafka` container, and a migration guide from spiffe-helper: ACLs for the new principals first, then the broker, then the clients one at a time.
