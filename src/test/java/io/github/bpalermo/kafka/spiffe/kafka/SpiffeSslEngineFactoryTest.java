@@ -391,4 +391,46 @@ class SpiffeSslEngineFactoryTest {
       assertEquals(newest, leaf(connect(client, broker).client().getPeerCertificates()));
     }
   }
+
+  @Test
+  void handshakesAreCountedInThePeerVerificationMBeans() throws Exception {
+    // A JMX domain of this test's own: the counts are the process's, per domain.
+    String domain = "test.peer.verification";
+    Map<String, Object> client = clientConfigs();
+    client.put("spiffe.metrics.jmx.domain", domain);
+    Map<String, Object> broker = brokerConfigs();
+    broker.put("spiffe.metrics.jmx.domain", domain);
+    // A broker that allows only brokers, so it refuses the client.
+    Map<String, Object> strict = brokerConfigs();
+    strict.remove("spiffe.peer.allowed.trust.domains");
+    strict.put("spiffe.metrics.jmx.domain", domain);
+    SpiffeSslEngineFactory clientFactory = factory(client);
+    SpiffeSslEngineFactory brokerFactory = factory(broker);
+    SpiffeSslEngineFactory strictFactory = factory(strict);
+
+    connect(clientFactory, brokerFactory);
+    assertThrows(SSLException.class, () -> connect(clientFactory, strictFactory));
+
+    javax.management.MBeanServer server =
+        java.lang.management.ManagementFactory.getPlatformMBeanServer();
+    javax.management.ObjectName asServer =
+        new javax.management.ObjectName(domain + ":type=peer-verification,mode=server");
+    javax.management.ObjectName asClient =
+        new javax.management.ObjectName(domain + ":type=peer-verification,mode=client");
+    assertEquals(1L, server.getAttribute(asServer, "accepted-total"));
+    assertEquals(1L, server.getAttribute(asServer, "rejected-total"));
+    assertEquals(1L, server.getAttribute(asServer, "rejected-id-not-allowed-total"));
+    assertEquals(0L, server.getAttribute(asServer, "rejected-chain-total"));
+    // The client verified both brokers before the strict one refused it.
+    assertEquals(2L, server.getAttribute(asClient, "accepted-total"));
+    assertEquals(0L, server.getAttribute(asClient, "rejected-total"));
+
+    // Registered while a factory of the domain is open.
+    clientFactory.close();
+    brokerFactory.close();
+    assertTrue(server.isRegistered(asServer));
+    strictFactory.close();
+    assertFalse(server.isRegistered(asServer));
+    assertFalse(server.isRegistered(asClient));
+  }
 }

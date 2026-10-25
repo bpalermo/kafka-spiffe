@@ -253,4 +253,44 @@ class SpiffeTrustManagerTest {
     manager().checkServerTrusted(chain, "EC", (java.net.Socket) null);
     manager().checkServerTrusted(chain, "EC", (javax.net.ssl.SSLEngine) null);
   }
+
+  @Test
+  void tellsTheObserverWhatEachHandshakeVerificationCameTo() throws CertificateException {
+    List<String> seen = new ArrayList<>();
+    SpiffeTrustManager.Observer observer =
+        new SpiffeTrustManager.Observer() {
+          @Override
+          public void accepted(boolean server, SpiffeId id) {
+            seen.add((server ? "server " : "client ") + id);
+          }
+
+          @Override
+          public void rejected(boolean server, PeerRejectedException rejection) {
+            seen.add((server ? "server " : "client ") + rejection.reason());
+          }
+        };
+    SpiffeTrustManager manager =
+        new SpiffeTrustManager(
+            BUNDLES,
+            SpiffeIdMatcher.none().withIds(List.of("spiffe://example.org/broker")),
+            Clock.fixed(TestPki.NOW, ZoneOffset.UTC),
+            observer);
+
+    manager.checkServerTrusted(chain(OWN.svid("/broker")), "EC", (javax.net.ssl.SSLEngine) null);
+    X509Certificate[] outsider = chain(FEDERATED.svid("/ns/a/sa/b"));
+    assertThrows(PeerRejectedException.class, () -> manager.checkClientTrusted(outsider, "EC"));
+    X509Certificate[] unknown = chain(TestPki.root("other.org").svid("/x"));
+    assertThrows(
+        PeerRejectedException.class,
+        () -> manager.checkClientTrusted(unknown, "EC", (java.net.Socket) null));
+    // verify() is not a handshake: it tells the observer nothing.
+    manager.verify(chain(OWN.svid("/broker")), true);
+
+    assertEquals(
+        List.of(
+            "server spiffe://example.org/broker",
+            "client " + Reason.ID_NOT_ALLOWED,
+            "client " + Reason.UNKNOWN_TRUST_DOMAIN),
+        seen);
+  }
 }

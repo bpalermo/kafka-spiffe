@@ -222,11 +222,27 @@ Each Workload API connection registers one MBean, `kafka.spiffe:type=x509-source
 | `svid-ttl-remaining-ms` | How long until it expires; negative once it has |
 | `bundle-count`, `bundle-trust-domains` | The trust domains with a bundle, and their names |
 
+Every process also counts the peers its handshakes accepted and refused, in two MBeans per JMX domain:
+- `kafka.spiffe:type=peer-verification,mode=server`, for handshakes in which it verified a client (a broker's clients and the other brokers);
+- `mode=client`, for those in which it verified a broker.
+
+The counts cover every factory of the process and only grow.
+
+| Attribute | Meaning |
+|---|---|
+| `accepted-total` | Peers accepted |
+| `rejected-total` | Peers refused, for any reason |
+| `rejected-malformed-svid-total` | No certificate, or a leaf that is not a valid X.509-SVID |
+| `rejected-unknown-trust-domain-total` | A trust domain the agent delivered no bundle for |
+| `rejected-chain-total` | A chain that does not verify against its trust domain's bundle, or not for this purpose |
+| `rejected-id-not-allowed-total` | A valid SVID whose ID the peer allow-list does not cover |
+
 The Prometheus JMX exporter on a broker picks the MBeans up with `includeObjectNames: ["kafka.spiffe:*"]` added to its configuration. Worth an alert:
 
 - `svid-ttl-remaining-ms` below a third of the SVID's lifetime. SPIRE rotates at about half, so a rotation is overdue.
 - `connected` at 0 for more than a few minutes.
 - `updates-rejected-total` increasing.
+- `rejected-total` of `mode=server` increasing: workloads trying to connect that the allow-list or the bundles do not let in.
 
 ### Logs
 
@@ -236,6 +252,7 @@ Logs go through slf4j, so Kafka's logging configuration applies; the loggers are
 - **Expiry:** a warning when an SVID is two thirds through its lifetime without a rotation, and an error once it has expired.
 - **The stream:** each time it ends, and why.
 - **Refused updates:** each update the library refuses, and why.
+- **Refused peers**, at most ten lines a minute: `Refused a TLS client in the handshake (id-not-allowed): the peer spiffe://… is not allowed`. The reason is one of those the MBean counts.
 
 ### When the Workload API goes away
 
@@ -255,7 +272,7 @@ Logs go through slf4j, so Kafka's logging configuration applies; the loggers are
 | `ConfigException` naming a `spiffe.*` key | A typo or an unknown key: every `spiffe.*` key is checked, and an unknown one is an error |
 | `ConfigException` on `listener.name.<listener>.spiffe.…` | That form does not exist; per-listener principal settings are `spiffe.principal.listener.<listener>.*` |
 | A broker refuses to start, asking for `ssl.client.auth=required` | Brokers authenticate their clients; set it, or `spiffe.server.allow.unauthenticated=true` if you really mean it |
-| A client gets `SslAuthenticationException` | One side refused the other in the handshake. The side that refused names why in its handshake failure: an unknown trust domain (the agent has no bundle for it), a chain that does not verify, or an ID outside its peer allow-list. The other side sees only a TLS alert |
+| A client gets `SslAuthenticationException` | One side refused the other in the handshake. The side that refused logs `Refused a TLS … in the handshake (<reason>)` with the peer's ID and counts it in `peer-verification`: an unknown trust domain (the agent has no bundle for it), a chain that does not verify, or an ID outside its peer allow-list. The other side sees only a TLS alert |
 | A client gets authorization errors, and the broker logs `… gets Spiffe:spiffe-unauthorized` | The client connected but is outside the principal allow-list, or no mapping rule maps its ID |
 | An ACL for a workload has no effect | The principal is `Spiffe:` (not `User:`) and the full SPIFFE ID, unless a mapping rule changes it; `kafka-acls.sh --list` shows what was written |
 

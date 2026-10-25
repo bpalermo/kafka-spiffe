@@ -65,7 +65,38 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   private final BundleSet bundles;
   private final SpiffeIdMatcher peers;
   private final Clock clock;
+  private final Observer observer;
   private final Map<TrustDomain, Set<TrustAnchor>> anchors;
+
+  /**
+   * What a handshake's verification of its peer came to, for metrics and logs. Called on the
+   * handshake's thread, so it must be quick and must not throw.
+   */
+  public interface Observer {
+    /** Counts nothing. */
+    Observer NONE =
+        new Observer() {
+          @Override
+          public void accepted(boolean server, SpiffeId id) {}
+
+          @Override
+          public void rejected(boolean server, PeerRejectedException rejection) {}
+        };
+
+    /**
+     * A peer accepted.
+     *
+     * @param server whether the peer is a server (otherwise a client)
+     */
+    void accepted(boolean server, SpiffeId id);
+
+    /**
+     * A peer refused.
+     *
+     * @param server whether the peer is a server (otherwise a client)
+     */
+    void rejected(boolean server, PeerRejectedException rejection);
+  }
 
   /**
    * A trust manager over one snapshot's bundles.
@@ -75,9 +106,23 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
    * @param clock the time chains are validated at
    */
   public SpiffeTrustManager(BundleSet bundles, SpiffeIdMatcher peers, Clock clock) {
+    this(bundles, peers, clock, Observer.NONE);
+  }
+
+  /**
+   * A trust manager over one snapshot's bundles that tells {@code observer} what each handshake's
+   * verification came to.
+   *
+   * @param bundles the bundles peers are verified against
+   * @param peers the SPIFFE IDs accepted of peers
+   * @param clock the time chains are validated at
+   */
+  public SpiffeTrustManager(
+      BundleSet bundles, SpiffeIdMatcher peers, Clock clock, Observer observer) {
     this.bundles = bundles;
     this.peers = peers;
     this.clock = clock;
+    this.observer = observer;
     Map<TrustDomain, Set<TrustAnchor>> byDomain = new HashMap<>();
     for (X509Bundle bundle : bundles.bundles()) {
       byDomain.put(bundle.trustDomain(), anchorsOf(bundle));
@@ -265,37 +310,50 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   @Override
   public void checkClientTrusted(X509Certificate[] chain, String authType)
       throws CertificateException {
-    verify(chain, false);
+    observed(chain, false, null);
   }
 
   @Override
   public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket)
       throws CertificateException {
-    verify(chain, false, constraints(socket));
+    observed(chain, false, constraints(socket));
   }
 
   @Override
   public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
       throws CertificateException {
-    verify(chain, false, constraints(engine));
+    observed(chain, false, constraints(engine));
   }
 
   @Override
   public void checkServerTrusted(X509Certificate[] chain, String authType)
       throws CertificateException {
-    verify(chain, true);
+    observed(chain, true, null);
   }
 
   @Override
   public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket)
       throws CertificateException {
-    verify(chain, true, constraints(socket));
+    observed(chain, true, constraints(socket));
   }
 
   @Override
   public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
       throws CertificateException {
-    verify(chain, true, constraints(engine));
+    observed(chain, true, constraints(engine));
+  }
+
+  /** A handshake's verification, told to the observer. */
+  private void observed(X509Certificate[] chain, boolean server, AlgorithmConstraints constraints)
+      throws PeerRejectedException {
+    SpiffeId id;
+    try {
+      id = verify(chain, server, constraints);
+    } catch (PeerRejectedException e) {
+      observer.rejected(server, e);
+      throw e;
+    }
+    observer.accepted(server, id);
   }
 
   @Override

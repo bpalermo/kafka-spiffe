@@ -65,6 +65,24 @@ public final class SnapshotSslContext {
   public static SSLContext create(
       X509Context snapshot, SpiffeIdMatcher peers, Settings settings, Clock clock)
       throws GeneralSecurityException {
+    return create(snapshot, peers, settings, clock, SpiffeTrustManager.Observer.NONE);
+  }
+
+  /**
+   * The context of {@code snapshot}, whose handshakes tell {@code observer} what the verification
+   * of their peer came to.
+   *
+   * @param peers the SPIFFE IDs accepted of peers
+   * @param clock the time peers' chains are validated at
+   * @throws GeneralSecurityException if the JDK cannot make the context
+   */
+  public static SSLContext create(
+      X509Context snapshot,
+      SpiffeIdMatcher peers,
+      Settings settings,
+      Clock clock,
+      SpiffeTrustManager.Observer observer)
+      throws GeneralSecurityException {
     KeyStore keys = KeyStore.getInstance("PKCS12");
     try {
       keys.load(null, null);
@@ -83,7 +101,7 @@ public final class SnapshotSslContext {
             : SSLContext.getInstance(settings.protocol(), settings.provider());
     context.init(
         keyManagers.getKeyManagers(),
-        new TrustManager[] {new SpiffeTrustManager(snapshot.bundles(), peers, clock)},
+        new TrustManager[] {new SpiffeTrustManager(snapshot.bundles(), peers, clock, observer)},
         null);
     context.getClientSessionContext().setSessionTimeout(SESSION_TIMEOUT_SECONDS);
     context.getServerSessionContext().setSessionTimeout(SESSION_TIMEOUT_SECONDS);
