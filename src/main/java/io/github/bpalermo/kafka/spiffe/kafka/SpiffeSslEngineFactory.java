@@ -4,6 +4,7 @@ import io.github.bpalermo.kafka.spiffe.workload.X509MaterialSource;
 import io.github.bpalermo.kafka.spiffe.workload.X509SourceRegistry;
 import io.github.bpalermo.kafka.spiffe.x509.SnapshotSslContext;
 import io.github.bpalermo.kafka.spiffe.x509.X509Context;
+import java.lang.ref.Cleaner;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.time.Clock;
@@ -14,7 +15,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
@@ -36,6 +36,11 @@ import org.slf4j.LoggerFactory;
  * #truststore()} are null, so Kafka's keystore checks and validating handshake on reconfiguration
  * do not apply. {@code spiffe.*} keys are not reconfigurable: a factory Kafka rebuilds keeps its
  * predecessor's.
+ *
+ * <p>Kafka does not close every factory it makes: {@code SslFactory.validateReconfiguration} builds
+ * one and drops it, and so does a failed validation handshake (3.0 to 4.4). So a factory registers
+ * no listener on the shared source, which would keep it reachable, and releases its handle on the
+ * source when it is closed or, failing that, collected.
  */
 public final class SpiffeSslEngineFactory implements SslEngineFactory {
 
@@ -60,6 +65,7 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
 
   private static final Logger LOG = LoggerFactory.getLogger(SpiffeSslEngineFactory.class);
   private static final AtomicBoolean ENDPOINT_IDENTIFICATION_LOGGED = new AtomicBoolean();
+  private static final Cleaner CLEANER = Cleaner.create();
 
   private final Function<String, X509SourceRegistry> registries;
   private final Clock clock;
@@ -72,7 +78,7 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
   private List<String> cipherSuites;
   private String clientAuth;
   private X509MaterialSource source;
-  private Consumer<X509Context> listener;
+  private Cleaner.Cleanable release;
   private volatile Snapshot snapshot;
 
   /** A snapshot and the JDK context made of it. */
@@ -117,9 +123,10 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
     }
     warnAboutIgnoredKeys(configs);
 
-    source = registries.apply(config.jmxDomain()).acquire(config.source());
-    listener = this::rebuild;
-    source.addListener(listener);
+    X509MaterialSource acquired = registries.apply(config.jmxDomain()).acquire(config.source());
+    source = acquired;
+    // The cleaning action holds the handle, never this factory.
+    release = CLEANER.register(this, acquired::close);
     try {
       source.awaitFirst(config.startupTimeout());
       rebuild(source.current());
@@ -198,11 +205,11 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
 
   @Override
   public void close() {
-    X509MaterialSource held = source;
     source = null;
+    Cleaner.Cleanable held = release;
+    release = null;
     if (held != null) {
-      held.removeListener(listener);
-      held.close();
+      held.clean();
     }
   }
 
@@ -241,7 +248,7 @@ public final class SpiffeSslEngineFactory implements SslEngineFactory {
    * Builds the JDK context of the source's newest snapshot; a failure keeps the one in use.
    *
    * <p>{@code offered} is what the caller saw, which may be stale by the time the lock is taken: a
-   * caller that read one rotation and paused while the listener installed it and the next must not
+   * caller that read one rotation and paused while other threads installed it and the next must not
    * roll the factory back. So the snapshot built is the source's newest, read under the lock, and
    * {@code offered} is used only once the source is gone.
    */

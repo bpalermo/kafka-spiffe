@@ -324,6 +324,28 @@ class SpiffeSslEngineFactoryTest {
   }
 
   @Test
+  void aFactoryKafkaDropsWithoutClosingReleasesTheSourceOnceCollected() throws Exception {
+    factory(clientConfigs());
+    unclosedFactory();
+    assertEquals(1, registry.size());
+    // A rotation must not need the dropped factory, or keep it reachable.
+    clientAgent.publish(response(CLIENT_CA.svid("/ns/a/sa/b"), CLIENT_CA));
+    factories.forEach(SpiffeSslEngineFactory::close);
+    factories.clear();
+    eventually(
+        () -> {
+          System.gc();
+          return registry.size() == 0;
+        },
+        "the dropped factory's handle to be released");
+  }
+
+  /** Configures a factory and drops it without closing it, as Kafka's validation does. */
+  private void unclosedFactory() {
+    new SpiffeSslEngineFactory(domain -> registry, clock, Map.of()).configure(clientConfigs());
+  }
+
+  @Test
   void emptyProtocolAndCipherListsMeanTheJdkDefaultsAsInKafkasOwnFactory() {
     Map<String, Object> configs = clientConfigs();
     configs.put(SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG, List.of());
@@ -338,10 +360,12 @@ class SpiffeSslEngineFactoryTest {
   void aStaleCallerCannotRollTheFactoryBack() throws Exception {
     SpiffeSslEngineFactory client = factory(clientConfigs());
     SpiffeSslEngineFactory broker = factory(brokerConfigs());
-    X509Certificate first = leaf(connect(client, broker).client().getPeerCertificates());
+    TestPki.Issued last = null;
     for (int i = 0; i < 3; i++) {
-      brokerAgent.publish(response(BROKER_CA.svid("/broker"), BROKER_CA));
+      last = BROKER_CA.svid("/broker");
+      brokerAgent.publish(response(last, BROKER_CA));
     }
+    X509Certificate newest = last.leaf();
     // Rotations arrive while engines are made from other threads; whatever the interleaving, every
     // engine made after the last rotation is installed presents the newest SVID.
     java.util.concurrent.ExecutorService pool =
@@ -354,22 +378,17 @@ class SpiffeSslEngineFactoryTest {
       pool.shutdown();
       assertTrue(pool.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS));
     }
-    X509Certificate[] newest = new X509Certificate[1];
     eventually(
         () -> {
           try {
-            X509Certificate now = leaf(connect(client, broker).client().getPeerCertificates());
-            boolean stable =
-                now.equals(leaf(connect(client, broker).client().getPeerCertificates()));
-            newest[0] = now;
-            return stable && !now.equals(first);
+            return newest.equals(leaf(connect(client, broker).client().getPeerCertificates()));
           } catch (SSLException e) {
             throw new AssertionError(e);
           }
         },
-        "the newest SVID");
+        "the last published SVID");
     for (int i = 0; i < 10; i++) {
-      assertEquals(newest[0], leaf(connect(client, broker).client().getPeerCertificates()));
+      assertEquals(newest, leaf(connect(client, broker).client().getPeerCertificates()));
     }
   }
 }
