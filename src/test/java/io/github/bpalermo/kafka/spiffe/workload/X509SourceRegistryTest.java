@@ -2,6 +2,7 @@ package io.github.bpalermo.kafka.spiffe.workload;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bpalermo.kafka.spiffe.testing.FakeWorkloadApi;
@@ -97,13 +98,25 @@ class X509SourceRegistryTest {
           new X509SourceRegistry(Clock.fixed(TestPki.NOW, ZoneOffset.UTC));
       X509Source.Settings settings = X509Source.Settings.of(api.socket());
       try (X509MaterialSource kept = registry.acquire(settings)) {
-        kept.awaitFirst(Duration.ofSeconds(10));
+        // The first snapshot's listeners may run after awaitFirst returns: only later ones count.
+        X509Context first = kept.awaitFirst(Duration.ofSeconds(10));
         AtomicInteger closedSees = new AtomicInteger();
         AtomicInteger keptSees = new AtomicInteger();
-        kept.addListener(context -> keptSees.incrementAndGet());
+        kept.addListener(
+            context -> {
+              if (context != first) {
+                keptSees.incrementAndGet();
+              }
+            });
         X509MaterialSource closed = registry.acquire(settings);
-        closed.addListener(context -> closedSees.incrementAndGet());
+        closed.addListener(
+            context -> {
+              if (context != first) {
+                closedSees.incrementAndGet();
+              }
+            });
         closed.close();
+        assertThrows(IllegalStateException.class, () -> closed.addListener(context -> {}));
 
         api.publish(
             new FakeWorkloadApi.Response().svid(FakeWorkloadApi.Svid.of(OWN.svid("/b"), OWN)));
