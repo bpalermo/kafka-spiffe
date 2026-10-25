@@ -5,7 +5,7 @@ java_junit_test(
     name = "metrics_test",
     srcs = glob(["*.java"]),
     javacopts = JAVACOPTS,
-    test_classes = ["io.github.bpalermo.kafka.spiffe.metrics.PlaceholderTest"],
+    test_classes = ["io.github.bpalermo.kafka.spiffe.metrics.GaugeMBeanTest"],
     deps = [
         "//src/main/java/io/github/bpalermo/kafka/spiffe/metrics",
         "@maven//:org_junit_jupiter_junit_jupiter_api",
