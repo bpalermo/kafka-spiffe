@@ -26,6 +26,15 @@
     <exclude name="ImplicitFunctionalInterface"/>
             <!-- Does not see a use through a method reference; Error Prone's UnusedMethod does. -->
     <exclude name="UnusedPrivateMethod"/>
+    <!-- Configured below. -->
+    <exclude name="SystemPrintln"/>
+  </rule>
+  <rule ref="category/java/bestpractices.xml/SystemPrintln">
+    <properties>
+      <!-- A test's driver, run in a JVM of its own, reports to its test on standard output. -->
+      <property name="violationSuppressXPath"
+          value="./ancestor::ClassDeclaration[ends-with(@SimpleName, 'Driver')]"/>
+    </properties>
   </rule>
 
   <rule ref="category/java/errorprone.xml">

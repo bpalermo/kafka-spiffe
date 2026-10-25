@@ -133,3 +133,58 @@ HARNESSES = {
     )
     for name, (repo, harness, _, _) in HARNESSES.items()
 ]
+
+# Run in a JVM of its own by the cross-version tests below, so it depends on nothing
+# but Kafka's public API: its class path there is the published jar, another Kafka
+# version's kafka-clients and slf4j-api.
+java_library(
+    name = "client_driver",
+    testonly = True,
+    srcs = ["ClientDriver.java"],
+    javacopts = JAVACOPTS,
+    deps = ["//bazel/maven:kafka_clients_provided"],
+)
+
+# Clients of one Kafka version against brokers of another (design section 9, "Clients
+# across versions"): the broker in the test's process, on the KRaft cluster of a target
+# above, the client in a JVM of its own on the other version's kafka-clients.
+# Target -> (the broker's target above, the client's Kafka repository).
+CROSS_VERSIONS = {
+    "client_3_0_broker_4_4_test": ("kafka_4_4_test", "kafka_3_0"),
+    "client_4_4_broker_3_9_test": ("kafka_3_9_test", "kafka_4_4"),
+}
+
+[
+    kafka_version_test(
+        name = name,
+        size = "medium",
+        srcs = ["CrossVersionTest.java"],
+        data = [
+            ":client_driver",
+            "//:kafka-spiffe-maven-artifact",
+            "@%s//:org_apache_kafka_kafka_clients" % client,
+            "@maven//:org_slf4j_slf4j_api",
+        ],
+        jvm_flags = [
+            "-Dkafka.spiffe.cluster=io.github.bpalermo.kafka.spiffe.broker." + HARNESSES[broker][1],
+            "-Dclient.kafka=$(rootpath @%s//:org_apache_kafka_kafka_clients)" % client,
+            "-Dclient.version=" + KAFKA_VERSIONS[client],
+            "-Djar.binary=$(rootpath //:kafka-spiffe-maven-artifact)",
+            "-Djar.driver=$(rootpath :client_driver)",
+            "-Djar.slf4j=$(rootpath @maven//:org_slf4j_slf4j_api)",
+        ],
+        repo = HARNESSES[broker][0],
+        test_classes = ["io.github.bpalermo.kafka.spiffe.broker.CrossVersionTest"],
+        version = KAFKA_VERSIONS[HARNESSES[broker][0]],
+        runtime_deps = [":%s_cluster" % broker],
+        deps = [
+            ":client_driver",
+            ":cluster",
+            "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+            "@maven//:io_netty_netty_transport_classes_epoll",
+        ],
+    )
+    for name, (broker, client) in CROSS_VERSIONS.items()
+]
