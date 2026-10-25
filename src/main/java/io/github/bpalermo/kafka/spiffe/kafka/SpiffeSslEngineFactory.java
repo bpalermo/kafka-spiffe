@@ -41,6 +41,8 @@ import org.slf4j.LoggerFactory;
  * one and drops it, and so does a failed validation handshake (3.0 to 4.4). So a factory registers
  * no listener on the shared source, which would keep it reachable, and releases its handle on the
  * source when it is closed or, failing that, collected.
+ *
+ * <p>Public API (design, section 3).
  */
 public final class SpiffeSslEngineFactory implements SslEngineFactory {
 

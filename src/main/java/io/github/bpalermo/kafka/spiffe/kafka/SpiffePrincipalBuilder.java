@@ -44,6 +44,8 @@ import org.slf4j.LoggerFactory;
  * <p>It declares {@link KafkaPrincipalSerde} itself: from Kafka 4.2 {@link KafkaPrincipalBuilder}
  * extends it, and up to 4.1 a builder that does not declare it gets no serde, so requests forwarded
  * to the controller fail.
+ *
+ * <p>Public API (design, section 3).
  */
 public final class SpiffePrincipalBuilder
     implements KafkaPrincipalBuilder, KafkaPrincipalSerde, Configurable {

@@ -9,6 +9,7 @@ import java.time.Instant;
  *
  * @param svid the SVID this workload presents
  * @param bundles the bundles of its own trust domain and of those federated with it
+ *     <p>Public API (design, section 3).
  */
 public record X509Context(X509Svid svid, BundleSet bundles) {
 

@@ -10,6 +10,8 @@ import java.util.Set;
 /**
  * The trust bundles of a snapshot, one per trust domain: the workload's own and those federated
  * with it. Immutable.
+ *
+ * <p>Public API (design, section 3).
  */
 public final class BundleSet {
 

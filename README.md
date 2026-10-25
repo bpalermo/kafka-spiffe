@@ -26,7 +26,8 @@ A broker sets the same factory together with `principal.builder.class=io.github.
 - ACLs, and moving existing ones over;
 - what to monitor, and troubleshooting;
 - verifying a release;
-- every configuration key.
+- every configuration key;
+- the same SVIDs and bundles outside Kafka, from the library's public API, on the Kafka clients' Workload API stream.
 
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.bpalermo/kafka-spiffe)](https://central.sonatype.com/artifact/io.github.bpalermo/kafka-spiffe)
 

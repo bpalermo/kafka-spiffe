@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.bpalermo.kafka.spiffe.testing.FakeWorkloadApi;
 import io.github.bpalermo.kafka.spiffe.testing.Handshake;
 import io.github.bpalermo.kafka.spiffe.testing.TestPki;
+import io.github.bpalermo.kafka.spiffe.workload.X509MaterialSource;
 import io.github.bpalermo.kafka.spiffe.workload.X509SourceRegistry;
 import io.netty.channel.epoll.Epoll;
 import java.nio.file.Files;
@@ -130,6 +131,40 @@ class SpiffeSslEngineFactoryTest {
     configs.put(SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG, "https");
     configs.put("spiffe.startup.timeout.ms", "10000");
     return configs;
+  }
+
+  @Test
+  void aSourceAcquiredWithTheSameKeysIsTheFactorysOwn() throws Exception {
+    // The factory Kafka makes, on the process's shared registries and the system clock, so the
+    // SVID is valid now.
+    Instant now = Instant.now();
+    clientAgent.publish(
+        response(
+            CLIENT_CA
+                .leaf()
+                .uris("spiffe://k8s.example.org/ns/a/sa/b")
+                .validity(now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)))
+                .issue(),
+            CLIENT_CA));
+    Map<String, Object> configs = clientConfigs();
+    configs.put("spiffe.metrics.jmx.enabled", "false");
+    SpiffeSslEngineFactory factory = new SpiffeSslEngineFactory();
+    factory.configure(configs);
+    factories.add(factory);
+    X509SourceRegistry shared = X509SourceRegistry.shared(null);
+    int running = shared.size();
+    try (X509MaterialSource source = SpiffeConfig.parse(configs, Map.of()).acquireSource()) {
+      assertEquals(running, shared.size());
+      assertEquals(
+          "spiffe://k8s.example.org/ns/a/sa/b",
+          source.awaitFirst(Duration.ofSeconds(10)).svid().id().toString());
+      assertEquals(1, clientAgent.calls());
+      assertTrue(source.stats().updates() >= 1);
+    }
+    // The factory still holds the source.
+    assertEquals(running, shared.size());
+    factory.close();
+    assertEquals(running - 1, shared.size());
   }
 
   private static Handshake.Sessions connect(

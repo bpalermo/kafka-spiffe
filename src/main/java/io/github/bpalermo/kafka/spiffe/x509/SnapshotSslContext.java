@@ -24,6 +24,8 @@ import javax.net.ssl.TrustManager;
  *
  * <p>One context per snapshot: no handshake mixes the key of one snapshot with the trust of
  * another.
+ *
+ * <p>Public API (design, section 3).
  */
 public final class SnapshotSslContext {
 

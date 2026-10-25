@@ -18,6 +18,7 @@ import java.util.List;
  * @param chain the leaf, then its intermediates, never empty
  * @param key the leaf's private key
  * @param hint the Workload API's hint for this SVID, empty when it gave none
+ *     <p>Public API (design, section 3).
  */
 public record X509Svid(SpiffeId id, List<X509Certificate> chain, PrivateKey key, String hint) {
 

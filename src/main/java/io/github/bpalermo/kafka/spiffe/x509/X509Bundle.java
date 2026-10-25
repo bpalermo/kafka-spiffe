@@ -10,6 +10,7 @@ import java.util.List;
  *
  * @param trustDomain the trust domain the authorities belong to
  * @param authorities its root certificates; {@link SvidValidator} refuses an empty bundle
+ *     <p>Public API (design, section 3).
  */
 public record X509Bundle(TrustDomain trustDomain, List<X509Certificate> authorities) {
 

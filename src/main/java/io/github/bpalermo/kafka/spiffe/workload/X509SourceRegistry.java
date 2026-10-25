@@ -4,7 +4,9 @@ import io.github.bpalermo.kafka.spiffe.metrics.GaugeMBean;
 import io.github.bpalermo.kafka.spiffe.x509.X509Context;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
@@ -16,6 +18,12 @@ import org.slf4j.LoggerFactory;
  * One {@link X509Source} per set of settings per process, shared and reference-counted: a broker
  * makes an engine factory per network thread per listener and per inter-broker client (phase 0),
  * and all of them read the same stream.
+ *
+ * <p>Public API (design, section 3). The engine factory takes its source from {@link
+ * #shared(String)} with the JMX domain of its configuration, null when {@code
+ * spiffe.metrics.jmx.enabled=false}: an application that acquires settings of the same {@link
+ * X509Source.Identity} from the registry of the same domain shares the factory's source and its one
+ * stream. {@code SpiffeConfig.acquireSource()} does both from the factory's keys.
  */
 public final class X509SourceRegistry {
 
@@ -123,6 +131,7 @@ public final class X509SourceRegistry {
   private final class Handle implements X509MaterialSource {
     private final Entry entry;
     private final X509Source.Identity identity;
+    private final List<Consumer<X509Context>> listeners = new ArrayList<>();
     private boolean released;
 
     Handle(Entry entry, X509Source.Identity identity) {
@@ -140,14 +149,35 @@ public final class X509SourceRegistry {
       return entry.source.awaitFirst(timeout);
     }
 
+    /**
+     * Until removed, or until this handle is closed: the source may outlive it.
+     *
+     * @throws IllegalStateException if the handle is closed
+     */
     @Override
     public void addListener(Consumer<X509Context> listener) {
-      entry.source.addListener(listener);
+      // Under the registry's lock, as close() is: a listener is never added after close()
+      // removed this handle's.
+      synchronized (X509SourceRegistry.this) {
+        if (released) {
+          throw new IllegalStateException("the handle on " + identity.socket() + " is closed");
+        }
+        listeners.add(listener);
+        entry.source.addListener(listener);
+      }
     }
 
     @Override
     public void removeListener(Consumer<X509Context> listener) {
-      entry.source.removeListener(listener);
+      synchronized (X509SourceRegistry.this) {
+        listeners.remove(listener);
+        entry.source.removeListener(listener);
+      }
+    }
+
+    @Override
+    public Stats stats() {
+      return entry.source.stats();
     }
 
     @Override
@@ -157,6 +187,8 @@ public final class X509SourceRegistry {
           return;
         }
         released = true;
+        listeners.forEach(entry.source::removeListener);
+        listeners.clear();
       }
       release(entry, identity);
     }

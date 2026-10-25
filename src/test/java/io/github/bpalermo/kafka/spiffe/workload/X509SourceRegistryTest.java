@@ -2,15 +2,20 @@ package io.github.bpalermo.kafka.spiffe.workload;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.bpalermo.kafka.spiffe.testing.FakeWorkloadApi;
 import io.github.bpalermo.kafka.spiffe.testing.TestPki;
+import io.github.bpalermo.kafka.spiffe.x509.X509Context;
 import io.netty.channel.epoll.Epoll;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneOffset;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
@@ -49,6 +54,109 @@ class X509SourceRegistryTest {
     } finally {
       Files.deleteIfExists(directory);
     }
+  }
+
+  @Test
+  void aHandleReportsTheStatsOfItsSource() throws Exception {
+    Assumptions.assumeTrue(Epoll.isAvailable(), "the fake Workload API needs Netty's epoll");
+    Path directory = Files.createTempDirectory(Path.of("/tmp"), "st");
+    try (FakeWorkloadApi api = FakeWorkloadApi.start(directory.resolve("agent.sock"))) {
+      api.publish(
+          new FakeWorkloadApi.Response().svid(FakeWorkloadApi.Svid.of(OWN.svid("/a"), OWN)));
+      X509SourceRegistry registry =
+          new X509SourceRegistry(Clock.fixed(TestPki.NOW, ZoneOffset.UTC));
+      try (X509MaterialSource handle = registry.acquire(X509Source.Settings.of(api.socket()))) {
+        handle.awaitFirst(Duration.ofSeconds(10));
+        X509MaterialSource.Stats stats = handle.stats();
+        assertTrue(stats.connected());
+        assertEquals(1, stats.updates());
+        assertEquals(0, stats.rejectedUpdates());
+        assertEquals(0, stats.streamErrors());
+        assertEquals(TestPki.NOW, stats.lastUpdate());
+
+        api.publish(
+            new FakeWorkloadApi.Response().svid(FakeWorkloadApi.Svid.of(OWN.svid("/b"), OWN)));
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (handle.stats().updates() < 2 && System.nanoTime() < deadline) {
+          Thread.sleep(10);
+        }
+        assertEquals(2, handle.stats().updates());
+      }
+    } finally {
+      Files.deleteIfExists(directory);
+    }
+  }
+
+  @Test
+  void closingAHandleRemovesItsListenersFromTheSharedSource() throws Exception {
+    Assumptions.assumeTrue(Epoll.isAvailable(), "the fake Workload API needs Netty's epoll");
+    Path directory = Files.createTempDirectory(Path.of("/tmp"), "ls");
+    try (FakeWorkloadApi api = FakeWorkloadApi.start(directory.resolve("agent.sock"))) {
+      api.publish(
+          new FakeWorkloadApi.Response().svid(FakeWorkloadApi.Svid.of(OWN.svid("/a"), OWN)));
+      X509SourceRegistry registry =
+          new X509SourceRegistry(Clock.fixed(TestPki.NOW, ZoneOffset.UTC));
+      X509Source.Settings settings = X509Source.Settings.of(api.socket());
+      try (X509MaterialSource kept = registry.acquire(settings)) {
+        // The first snapshot's listeners may run after awaitFirst returns: only later ones count.
+        X509Context first = kept.awaitFirst(Duration.ofSeconds(10));
+        AtomicInteger closedSees = new AtomicInteger();
+        AtomicInteger keptSees = new AtomicInteger();
+        kept.addListener(
+            context -> {
+              if (context != first) {
+                keptSees.incrementAndGet();
+              }
+            });
+        X509MaterialSource closed = registry.acquire(settings);
+        closed.addListener(
+            context -> {
+              if (context != first) {
+                closedSees.incrementAndGet();
+              }
+            });
+        closed.close();
+        assertThrows(IllegalStateException.class, () -> closed.addListener(context -> {}));
+
+        api.publish(
+            new FakeWorkloadApi.Response().svid(FakeWorkloadApi.Svid.of(OWN.svid("/b"), OWN)));
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (keptSees.get() == 0 && System.nanoTime() < deadline) {
+          Thread.sleep(10);
+        }
+        assertEquals(1, keptSees.get());
+        assertEquals(0, closedSees.get());
+      }
+    } finally {
+      Files.deleteIfExists(directory);
+    }
+  }
+
+  @Test
+  void aSourceThatDoesNotCountReportsNone() {
+    X509MaterialSource files =
+        new X509MaterialSource() {
+          @Override
+          public X509Context current() {
+            throw new IllegalStateException();
+          }
+
+          @Override
+          public X509Context awaitFirst(Duration timeout) {
+            throw new IllegalStateException();
+          }
+
+          @Override
+          public void addListener(Consumer<X509Context> listener) {}
+
+          @Override
+          public void removeListener(Consumer<X509Context> listener) {}
+
+          @Override
+          public void close() {}
+        };
+    assertEquals(X509MaterialSource.Stats.NONE, files.stats());
+    assertTrue(files.stats().connected());
   }
 
   @Test

@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
  *
  * @param trustDomain the trust domain the ID belongs to
  * @param path the path, empty for the trust domain's own ID, otherwise starting with {@code /}
+ *     <p>Public API (design, section 3).
  */
 public record SpiffeId(TrustDomain trustDomain, String path) {
 

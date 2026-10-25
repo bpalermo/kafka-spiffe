@@ -118,6 +118,19 @@ What `workload.h2` implements, and no more:
 
 About 1,000 to 1,500 lines, most of them HPACK and frame handling. HTTP/2 is where subtle bugs live, so it is tested against the RFC's own vectors, against grpc-java as a server and against a real SPIRE agent (§9).
 
+### Public API
+
+Most users only name the two Kafka entry points in their configuration. An application that needs, outside Kafka, the same SVIDs and bundles its Kafka clients use (a gRPC server beside them, say) can read them from the library instead of opening a second Workload API stream. Semantic versioning covers these types, whose javadoc says so:
+
+| Package | Types |
+|---|---|
+| `kafka` | `SpiffeSslEngineFactory` and `SpiffePrincipalBuilder` (the Kafka entry points); `SpiffeConfig`: the keys, `parse`, and `acquireSource()`, a handle on the source a factory configured with the same keys uses |
+| `workload` | `X509SourceRegistry` (`shared(domain)`, `acquire(settings)`); `X509MaterialSource`, with `current()`, `awaitFirst`, listeners and `stats()` (connected, updates, rejected updates, stream errors, last update: what the source's MBean shows, without JMX); `X509Source`, its `Settings` and `Identity` |
+| `x509` | `X509Context`, `X509Svid`, `BundleSet`, `X509Bundle`; `SnapshotSslContext`, which makes a JDK `SSLContext` of a snapshot that verifies peers by SPIFFE ID |
+| `id` | `SpiffeId`, `TrustDomain`, `SpiffeIdMatcher` |
+
+The factory takes its source from `X509SourceRegistry.shared(domain)`, where the domain is `spiffe.metrics.jmx.domain`, or null with `spiffe.metrics.jmx.enabled=false`. Settings of the same identity acquired from the registry of the same domain share the factory's source; `SpiffeConfig.acquireSource()` does both from the factory's keys. Everything else is internal and may change in any release: `workload.h2`, the wire reader, `SvidValidator` and the other classes that are public only because another package of the library calls them.
+
 ## 4. Configuration
 
 Every key starts with `spiffe.`. They are read from the map Kafka passes to `configure()`, validated by a `ConfigDef`, and an unknown `spiffe.*` key is an error, so a typo does not go unnoticed. A `listener.name.<listener>.spiffe.*` key that reaches `configure()` is an error too. That catches it only when Kafka passes it on: when the same key is also set without the prefix, Kafka may drop the prefixed one before the library sees it (`ChannelBuilders.channelBuilderConfigs`), and nothing the library is given shows it was there. The operator documentation therefore says plainly that the form does not exist, and per-listener keys have a spelling of their own (`spiffe.principal.listener.<listener>.*`) that no filter touches. The keys are static (§2): set them in the properties file, never through `kafka-configs --alter`.
