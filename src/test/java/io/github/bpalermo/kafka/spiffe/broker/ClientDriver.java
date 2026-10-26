@@ -33,16 +33,23 @@ import org.apache.kafka.common.serialization.StringSerializer;
  * <p>It prints {@code version <kafka-clients version>}, then {@code round <connections>} after
  * producing five records and consuming them back. It then reads a number from its standard input,
  * waits until its Workload API source has taken that many updates, does another round on the same
- * clients and prints {@code round <connections>} again; reads another line, and prints {@code
- * fresh} once a new producer, on a new connection, has had a record acknowledged. {@code
- * <connections>} is the producer's and the consumer's {@code connection-creation-total}. A failure
- * is an exception, which exits 1.
+ * clients and prints {@code round <connections>} again; reads another line, waits until the broker
+ * has closed every connection of the producer as idle, and prints {@code fresh <before> <after>}
+ * once the same producer, on a new connection, has had a record acknowledged, with its {@code
+ * connection-creation-total} before and after. {@code <connections>} is the producer's and the
+ * consumer's {@code connection-creation-total}. A failure is an exception, which exits 1.
  *
  * <p>Arguments: the bootstrap servers, the Workload API socket, the broker's SPIFFE ID, the topic.
  */
 public final class ClientDriver {
 
   private static final Duration WAIT = Duration.ofSeconds(60);
+
+  /**
+   * The broker's connections.max.idle.ms (CrossVersionTest): the rounds take well under it, and the
+   * broker closes an idle connection between one and two of it later.
+   */
+  static final Duration IDLE = Duration.ofSeconds(5);
 
   private ClientDriver() {}
 
@@ -87,13 +94,20 @@ public final class ClientDriver {
       awaitUpdates(source, Long.parseLong(line(in)));
       round(producer, consumer, topic);
       out.println("round " + (connections(producer.metrics()) + connections(consumer.metrics())));
+      line(in);
+      // The same producer, once the broker has closed its connections as idle: its next record goes
+      // over a new connection, whose engine its factory makes from the source's newest snapshot.
+      double before = connections(producer.metrics());
+      Instant deadline = Instant.now().plus(WAIT);
+      while (open(producer.metrics()) > 0) {
+        if (Instant.now().isAfter(deadline)) {
+          throw new IllegalStateException("the broker did not close the idle connections");
+        }
+        Thread.sleep(100);
+      }
+      producer.send(new ProducerRecord<>(topic, 0, "fresh", "fresh")).get();
+      out.println("fresh " + before + " " + connections(producer.metrics()));
     }
-    line(in);
-    try (KafkaProducer<String, String> fresh =
-        new KafkaProducer<>(configs, new StringSerializer(), new StringSerializer())) {
-      fresh.send(new ProducerRecord<>(topic, 0, "fresh", "fresh")).get();
-    }
-    out.println("fresh");
   }
 
   private static String line(BufferedReader in) throws IOException {
@@ -138,6 +152,18 @@ public final class ClientDriver {
         }
       }
     }
+  }
+
+  /** The producer's {@code connection-count}: its connections open now. */
+  private static double open(Map<MetricName, ? extends Metric> metrics) {
+    double total = 0;
+    for (Map.Entry<MetricName, ? extends Metric> metric : metrics.entrySet()) {
+      MetricName name = metric.getKey();
+      if (name.name().equals("connection-count") && name.group().equals("producer-metrics")) {
+        total += ((Number) metric.getValue().metricValue()).doubleValue();
+      }
+    }
+    return total;
   }
 
   private static double connections(Map<MetricName, ? extends Metric> metrics) {

@@ -54,7 +54,8 @@ import org.junit.jupiter.api.Test;
  * other version's {@code kafka-clients} and {@code slf4j-api}. The client produces and consumes
  * under ACLs on its {@code Spiffe:} principal, and keeps its connections while its trust domain
  * moves to a new root and its SVID is reissued by it; once the broker trusts only the new root, a
- * new connection of the client's succeeds, so the client presents the new SVID.
+ * new connection that the same producer opens through its own factory succeeds, so that factory
+ * presents the new SVID.
  *
  * <p>System properties: {@code client.kafka} and {@code client.version}, the client's {@code
  * kafka-clients} jar and its version; {@code jar.binary}, {@code jar.driver} and {@code jar.slf4j},
@@ -100,6 +101,8 @@ class CrossVersionTest {
     configs.put("offsets.topic.replication.factor", "1");
     configs.put("transaction.state.log.replication.factor", "1");
     configs.put("transaction.state.log.min.isr", "1");
+    // So that the client's producer, idle, is made to open a new connection (ClientDriver).
+    configs.put("connections.max.idle.ms", Long.toString(ClientDriver.IDLE.toMillis()));
     cluster = BrokerCluster.named();
     closeables.add(cluster::stop);
     cluster.start(1, configs);
@@ -182,10 +185,15 @@ class CrossVersionTest {
     assertEquals(
         first, line(reader, out), "connection-creation-total of the producer and consumer");
 
-    // The broker drops the old root: only the new SVID gets a new connection through.
+    // The broker drops the old root: only the new SVID gets a new connection through, which the
+    // same producer opens through the factory it has had from the start.
     publishToBroker(List.of(NEW_CLIENT_CA.certificate()));
     tell(in, "");
-    assertEquals("fresh", line(reader, out));
+    String[] fresh = line(reader, out).split(" ");
+    assertEquals("fresh", fresh[0]);
+    assertTrue(
+        Double.parseDouble(fresh[2]) > Double.parseDouble(fresh[1]),
+        "the producer opened a new connection");
     assertTrue(driver.waitFor(WAIT.toSeconds(), TimeUnit.SECONDS), "the driver exits");
     assertEquals(0, driver.exitValue());
   }
