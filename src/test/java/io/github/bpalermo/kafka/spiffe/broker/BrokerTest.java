@@ -39,6 +39,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
@@ -184,13 +185,16 @@ class BrokerTest {
     admin.createAcls(List.of(write, read, group)).all().get();
 
     FakeWorkloadApi app = agent(APP);
+    // The idempotent default of clients, once on every cluster: a producer ID asked for as
+    // Spiffe:APP, and granted by its write ACL.
+    sendIdempotently(app, new ProducerRecord<>("orders", "probe", "probe"));
     KafkaProducer<String, String> producer = producer(app);
     for (int i = 0; i < 10; i++) {
       send(producer, new ProducerRecord<>("orders", "k" + i, "v" + i));
     }
     KafkaConsumer<String, String> consumer = consumer(app, Map.of("group.id", "orders-reader"));
     consumer.subscribe(List.of("orders"));
-    assertEquals(10, consume(consumer, 10).size());
+    assertEquals(10, consume(consumer, r -> !"probe".equals(r.key()), 10).size());
 
     Set<String> principals = new HashSet<>();
     admin
@@ -485,6 +489,33 @@ class BrokerTest {
         Thread.sleep(100);
       }
     }
+  }
+
+  /**
+   * Has {@code record} acknowledged by an idempotent producer of {@code agent}'s identity, which
+   * first asks a broker for a producer ID; a new producer for each try, since a refused request
+   * leaves a producer in a fatal error state, until the brokers have applied the ACLs.
+   */
+  private static void sendIdempotently(FakeWorkloadApi agent, ProducerRecord<String, String> record)
+      throws InterruptedException {
+    eventually(
+        () -> {
+          Map<String, Object> configs = clientConfigs(agent);
+          configs.put("acks", "all");
+          configs.put("enable.idempotence", "true");
+          configs.put("max.block.ms", "5000");
+          try (KafkaProducer<String, String> producer =
+              new KafkaProducer<>(configs, new StringSerializer(), new StringSerializer())) {
+            producer.send(record).get();
+            return true;
+          } catch (ExecutionException | KafkaException e) {
+            return false;
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+          }
+        },
+        "an idempotent producer's record acknowledged");
   }
 
   private static List<ConsumerRecord<String, String>> consume(
