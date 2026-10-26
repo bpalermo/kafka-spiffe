@@ -1,3 +1,5 @@
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.bpalermo/kafka-spiffe)](https://central.sonatype.com/artifact/io.github.bpalermo/kafka-spiffe)
+
 # kafka-spiffe
 
 SPIFFE mutual TLS for Apache Kafka brokers and clients, 3.0 and later, without files:
@@ -28,8 +30,6 @@ A broker sets the same factory together with `principal.builder.class=io.github.
 - verifying a release;
 - every configuration key;
 - the same SVIDs and bundles outside Kafka, from the library's public API, on the Kafka clients' Workload API stream.
-
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.bpalermo/kafka-spiffe)](https://central.sonatype.com/artifact/io.github.bpalermo/kafka-spiffe)
 
 Releases are on Maven Central as `io.github.bpalermo:kafka-spiffe`, signed with the release key, and on [GitHub](https://github.com/bpalermo/kafka-spiffe/releases) with the jar and POM signed by cosign.
 
