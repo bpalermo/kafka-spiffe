@@ -69,6 +69,7 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   private final Clock clock;
   private final Observer observer;
   private final Map<TrustDomain, Set<TrustAnchor>> anchors;
+  private final VerifyingSslContext.Engines engines;
 
   /**
    * What a handshake's verification of its peer came to, for metrics and logs. Called on the
@@ -108,6 +109,10 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   /**
    * A trust manager over one snapshot's bundles.
    *
+   * <p>Verifies full handshakes only: the JDK does not call a trust manager when it resumes a
+   * session. {@link SnapshotSslContext} makes contexts whose engines verify resumed sessions too; a
+   * context of your own made with this trust manager does not.
+   *
    * @param bundles the bundles peers are verified against
    * @param peers the SPIFFE IDs accepted of peers
    * @param clock the time chains are validated at
@@ -120,12 +125,27 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
    * A trust manager over one snapshot's bundles that tells {@code observer} what each handshake's
    * verification came to.
    *
+   * <p>Verifies full handshakes only: the JDK does not call a trust manager when it resumes a
+   * session. {@link SnapshotSslContext} makes contexts whose engines verify resumed sessions too; a
+   * context of your own made with this trust manager does not.
+   *
    * @param bundles the bundles peers are verified against
    * @param peers the SPIFFE IDs accepted of peers
    * @param clock the time chains are validated at
    */
   public SpiffeTrustManager(
       BundleSet bundles, SpiffeIdMatcher peers, Clock clock, Observer observer) {
+    this(bundles, peers, clock, observer, null);
+  }
+
+  /** As above, telling {@code engines} which engines' peers it verified, if not null. */
+  SpiffeTrustManager(
+      BundleSet bundles,
+      SpiffeIdMatcher peers,
+      Clock clock,
+      Observer observer,
+      VerifyingSslContext.Engines engines) {
+    this.engines = engines;
     this.bundles = bundles;
     this.peers = peers;
     this.clock = clock;
@@ -330,6 +350,7 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
       throws CertificateException {
     observed(chain, false, constraints(engine));
+    verified(engine);
   }
 
   @Override
@@ -348,6 +369,22 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
       throws CertificateException {
     observed(chain, true, constraints(engine));
+    verified(engine);
+  }
+
+  private void verified(SSLEngine engine) {
+    if (engines != null) {
+      engines.verified(engine);
+    }
+  }
+
+  /**
+   * Verifies the peer of a handshake that did not call this trust manager, as a resumed session's
+   * does, and tells the observer, as a handshake's verification would.
+   */
+  void verifyAgain(X509Certificate[] chain, boolean server, AlgorithmConstraints constraints)
+      throws PeerRejectedException {
+    observed(chain, server, constraints);
   }
 
   /** A handshake's verification, told to the observer. */
