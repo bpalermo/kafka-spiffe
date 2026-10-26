@@ -14,13 +14,16 @@ import javax.net.ssl.TrustManager;
  * The JDK context of one snapshot: it presents the snapshot's SVID and verifies peers with a {@link
  * SpiffeTrustManager} over the snapshot's bundles.
  *
- * <p>Sessions are not resumed: both session contexts time sessions out after {@value
- * #SESSION_TIMEOUT_SECONDS} second, the shortest the JDK allows (it reads zero as no limit). A
- * session timeout counts from each session's creation, so no timeout can stop a session made late
- * in an SVID's life from being resumed after that SVID, or the peer's, has expired, without either
- * certificate being checked again; and a TLS 1.3 server hands out stateless tickets that no cache
- * holds and nothing can invalidate. Kafka's connections are long-lived, so a full handshake on
- * reconnecting costs little.
+ * <p>A resumed session's peer is verified again. The JDK resumes a session without checking either
+ * certificate, and no session timeout can stop a session made late in an SVID's life from being
+ * resumed after the peer's has expired (a timeout counts from the session's creation, and a TLS 1.3
+ * server hands out stateless tickets that nothing can invalidate). So the context's engines are the
+ * JDK's wrapped: a handshake that finishes without the trust manager having verified the engine's
+ * peer, as a resumption does, has the peer's certificates in the session verified by that trust
+ * manager, at its clock, and fails if they are refused. Both session contexts also time sessions
+ * out after {@value #SESSION_TIMEOUT_SECONDS} second, the shortest the JDK allows (it reads zero as
+ * no limit), so resumptions stay rare. The context's sockets are the JDK's own and do not verify a
+ * resumption again: use engines.
  *
  * <p>One context per snapshot: no handshake mixes the key of one snapshot with the trust of
  * another.
@@ -101,12 +104,12 @@ public final class SnapshotSslContext {
         settings.provider() == null
             ? SSLContext.getInstance(settings.protocol())
             : SSLContext.getInstance(settings.protocol(), settings.provider());
-    context.init(
-        keyManagers.getKeyManagers(),
-        new TrustManager[] {new SpiffeTrustManager(snapshot.bundles(), peers, clock, observer)},
-        null);
+    VerifyingSslContext.Engines engines = new VerifyingSslContext.Engines();
+    SpiffeTrustManager trust =
+        new SpiffeTrustManager(snapshot.bundles(), peers, clock, observer, engines);
+    context.init(keyManagers.getKeyManagers(), new TrustManager[] {trust}, null);
     context.getClientSessionContext().setSessionTimeout(SESSION_TIMEOUT_SECONDS);
     context.getServerSessionContext().setSessionTimeout(SESSION_TIMEOUT_SECONDS);
-    return context;
+    return new VerifyingSslContext(context, trust, engines);
   }
 }
