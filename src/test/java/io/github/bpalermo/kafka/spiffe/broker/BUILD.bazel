@@ -61,6 +61,16 @@ HARNESSES = {
             "@kafka_4_0//:org_apache_kafka_kafka_2_13",
         ],
     ),
+    "kafka_4_3_test": (
+        "kafka_4_3",
+        "Kraft4",
+        [
+            "@kafka_4_3//:org_apache_kafka_kafka_test_common_runtime",
+        ],
+        [
+            "@kafka_4_3//:org_apache_kafka_kafka_2_13",
+        ],
+    ),
     "kafka_4_4_test": (
         "kafka_4_4",
         "Kraft4",
@@ -121,6 +131,30 @@ HARNESSES = {
         jvm_flags = ["-Dkafka.spiffe.cluster=io.github.bpalermo.kafka.spiffe.broker." + harness],
         repo = repo,
         test_classes = ["io.github.bpalermo.kafka.spiffe.broker.BrokerTest"],
+        version = KAFKA_VERSIONS[repo],
+        runtime_deps = [":%s_cluster" % name],
+        deps = [
+            ":cluster",
+            "//src/main/java/io/github/bpalermo/kafka/spiffe/kafka",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing",
+            "//src/test/java/io/github/bpalermo/kafka/spiffe/testing:fake_workload_api",
+            "@maven//:io_netty_netty_transport_classes_epoll",
+        ],
+    )
+    for name, (repo, harness, _, _) in HARNESSES.items()
+]
+
+# A cluster halfway through the move from spiffe-helper (docs/operator.md): one broker
+# switched to the library, one still on PEM files, on every cluster above, as
+# :kafka_3_9_migration_test, :kafka_3_9_zookeeper_migration_test and so on.
+[
+    kafka_version_test(
+        name = name.removesuffix("_test") + "_migration_test",
+        size = "medium",
+        srcs = ["MigrationTest.java"],
+        jvm_flags = ["-Dkafka.spiffe.cluster=io.github.bpalermo.kafka.spiffe.broker." + harness],
+        repo = repo,
+        test_classes = ["io.github.bpalermo.kafka.spiffe.broker.MigrationTest"],
         version = KAFKA_VERSIONS[repo],
         runtime_deps = [":%s_cluster" % name],
         deps = [

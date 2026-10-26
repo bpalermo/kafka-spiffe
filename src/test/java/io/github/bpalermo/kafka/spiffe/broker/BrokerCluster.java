@@ -24,7 +24,17 @@ public interface BrokerCluster {
    * Formats and starts a cluster of {@code brokers} brokers, and the controller or ZooKeeper they
    * need, with {@code configs} on every node, and waits until the brokers are ready.
    */
-  BrokerCluster start(int brokers, Map<String, String> configs) throws Exception;
+  default BrokerCluster start(int brokers, Map<String, String> configs) throws Exception {
+    return start(brokers, configs, Map.of());
+  }
+
+  /**
+   * As {@link #start(int, Map)}, with the settings of broker {@code id}, numbered from 0, also
+   * taken from {@code overrides.get(id)}, which win over {@code configs}.
+   */
+  BrokerCluster start(
+      int brokers, Map<String, String> configs, Map<Integer, Map<String, String>> overrides)
+      throws Exception;
 
   /** Whether the cluster is KRaft, where requests are forwarded to a controller, or ZooKeeper. */
   boolean kraft();

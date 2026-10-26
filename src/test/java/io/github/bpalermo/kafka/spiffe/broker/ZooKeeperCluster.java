@@ -26,7 +26,9 @@ public final class ZooKeeperCluster implements BrokerCluster {
   private EmbeddedZookeeper zookeeper;
 
   @Override
-  public BrokerCluster start(int brokers, Map<String, String> configs) throws Exception {
+  public BrokerCluster start(
+      int brokers, Map<String, String> configs, Map<Integer, Map<String, String>> overrides)
+      throws Exception {
     zookeeper = new EmbeddedZookeeper();
     for (int id = 0; id < brokers; id++) {
       Path logs = Files.createTempDirectory("zookeeper-broker-" + id);
@@ -40,6 +42,7 @@ public final class ZooKeeperCluster implements BrokerCluster {
       properties.put("inter.broker.listener.name", LISTENER);
       properties.put("log.dirs", logs.toString());
       properties.put("controlled.shutdown.enable", "false");
+      properties.putAll(overrides.getOrDefault(id, Map.of()));
       // Started, and registered in ZooKeeper, when it returns.
       servers.add(TestUtils.createServer(KafkaConfig.fromProps(properties), Time.SYSTEM));
     }

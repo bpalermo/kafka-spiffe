@@ -1,6 +1,6 @@
 # Operating kafka-spiffe
 
-How to run Kafka brokers and clients with kafka-spiffe: installing the jar, configuring a broker and its clients, writing ACLs for SPIFFE principals, moving existing ACLs over, and what to watch. The reasons behind each behaviour are in the [design](design.md).
+How to run Kafka brokers and clients with kafka-spiffe: installing the jar, configuring a broker and its clients, writing ACLs for SPIFFE principals, moving from spiffe-helper, and what to watch. The reasons behind each behaviour are in the [design](design.md).
 
 What you need:
 
@@ -196,29 +196,81 @@ spiffe.peer.allowed.trust.domains=example.org,k8s.example.org
 spiffe.principal.listener.internal.allowed.ids=spiffe://example.org/kafka/broker
 ```
 
-## Moving existing ACLs over
+## Moving from spiffe-helper
 
-A cluster that today authenticates the same SVIDs through files has principals of another shape, usually `User:` followed by the certificate's subject DN. Those files are PEM written by spiffe-helper and loaded as a keystore and truststore, and the principal comes from Kafka's default builder or its `ssl.principal.mapping.rules`.
+A cluster that gets its SVIDs today through spiffe-helper (PEM files that it rewrites, and a keystore reload on each rotation) moves to the library one broker at a time, then one client at a time, with no downtime. Old and switched brokers and clients work together all along, because the old certificates are SVIDs too.
 
-Switching the principal builder changes every principal at once, so add the new ACLs before the switch and remove the old ones after it:
+The one thing that changes at once is the principal. Kafka's own builder gives `User:` and the certificate's subject DN; the library gives `Spiffe:` and the SPIFFE ID. So the new ACLs come first and the old ones go last:
 
 ```mermaid
 flowchart LR
     a["List the ACLs and super.users<br/>of every current principal"] --> b["Add the same ACLs and super.users<br/>for each Spiffe: principal"]
     b --> c["Switch the brokers,<br/>one at a time"]
     c --> d["Switch the clients"]
-    d --> e["Remove the old ACLs<br/>and super.users entries"]
+    d --> e["Remove the old ACLs,<br/>super.users entries and files"]
 ```
 
-1. **List what exists:** `kafka-acls.sh --list`, and `super.users` in every broker's configuration. Write down which SPIFFE ID each old principal stands for: the workload whose SVID carried that subject.
-2. **Add the new ACLs**, one `Spiffe:<SPIFFE ID>` (or one group principal from a mapping rule) for each old principal, with the same operations and resources. Add the brokers' SPIFFE IDs to `super.users` beside the old entries. Until the last broker is switched, a broker may see another broker under either name.
-3. **Switch the brokers** one at a time, with a rolling restart:
-   - **What changes:** each broker gets the jar, `ssl.engine.factory.class`, `principal.builder.class`, the `spiffe.*` keys, and no keystore or truststore.
-   - **Old clients keep working.** Their certificates are SVIDs too, so a switched broker verifies them by SPIFFE ID and gives them `Spiffe:` principals, which the new ACLs cover.
-4. **Switch the clients**, in any order: each needs the jar and its `spiffe.*` keys instead of a keystore and truststore.
-5. **Check the authorizer's log for denials**, then remove the old ACLs and `super.users` entries.
+### What changes
 
-A broker that has not been switched yet still needs a truststore holding every trust domain its clients come from. A switched broker needs only its agent to deliver those bundles.
+| With spiffe-helper | With kafka-spiffe |
+|---|---|
+| spiffe-helper beside each broker and client, its `helper.conf` and its certificate directory | Nothing beside the process: the JVM talks to the agent's socket (`spiffe.endpoint.socket`, or `SPIFFE_ENDPOINT_SOCKET`) |
+| `ssl.keystore.*` and `ssl.key.password`: the SVID and its private key, on disk | None; the key never leaves memory |
+| `ssl.truststore.*`: the bundle file, federated bundles appended | None; the agent delivers every bundle, federated ones included |
+| A reload on every rotation (`kafka-configs --alter` of the listener's keystore, or a restart); Java clients never reload, so they restart before their SVID expires | Nothing: each new connection uses the newest SVID |
+| `ssl.endpoint.identification.algorithm=` empty, since an SVID has no DNS name | Not needed: host names are never checked |
+| Peers trusted by CA: anything the truststore's roots signed | Peers allowed by SPIFFE ID or trust domain (`spiffe.peer.allowed.*`, required) |
+| `User:<subject DN>`, shaped by `ssl.principal.mapping.rules` | `Spiffe:<SPIFFE ID>`, shaped by `spiffe.principal.mapping.rules` |
+
+### The steps
+
+1. **List what exists:** `kafka-acls.sh --list`, and `super.users` on every node, controllers included. Write down which SPIFFE ID each DN principal stands for: the workload whose SVID carries that subject.
+   - Several workloads can share one DN, for instance when every SVID carries the same subject. Each now gets a principal of its own, so each needs its own ACLs, or a mapping rule that groups them ([Grouping workloads](#grouping-workloads)).
+2. **Add the new ACLs**, one `Spiffe:<SPIFFE ID>` (or one group principal) for each old principal, with the same operations and resources. Leave the old ones in place.
+   - **`super.users`:** add the brokers' and administrators' SPIFFE IDs beside the old DN entries, on every node. It is static, so it takes a restart; on a broker it can go with that broker's switch (step 3), and on KRaft controllers, which authorize the requests a switched broker forwards under the new principals, it must be in place before the first broker is switched.
+   - **Until the last broker is switched,** a broker sees another broker, and a client, under either name: a switched broker by SPIFFE ID, an old one by DN.
+3. **Switch the brokers** one at a time, with a rolling restart:
+   - **What each one gets:** the jar, `ssl.engine.factory.class`, `principal.builder.class` and the `spiffe.*` keys ([The broker](#the-broker)), and its spiffe-helper stops. Its `ssl.keystore.*`, `ssl.truststore.*` and `ssl.principal.mapping.rules` go; left in, they are logged as a mistake and ignored.
+   - **Its peer allow-list** must cover the brokers that are not switched yet and the old clients: they connect with their SVIDs, which it verifies by SPIFFE ID.
+   - **A broker not yet switched** keeps working with the switched ones. Its truststore must hold every trust domain a client or a broker comes from, and its `ssl.endpoint.identification.algorithm` must stay empty: it checks a switched broker's certificate as it checked the old one. A switched broker presents the same kind of SVID it got through spiffe-helper, from the same agent, so the old `super.users` entries still name it there.
+   - **To roll a broker back,** restore its previous configuration and its spiffe-helper; the old ACLs are still there.
+4. **Switch the clients**, in any order: each gets the jar and its `spiffe.*` keys ([Clients](#clients)) instead of a keystore and a truststore, and its spiffe-helper stops. Clients can start before the last broker is switched: an old broker verifies a switched client's SVID against its truststore, as before.
+5. **Clean up** once every broker and client is switched, and every KRaft controller whose listener is TLS too: a controller still on Kafka's own builder knows the brokers by DN, so switch it as in step 3 first, or keep its DN entries and files:
+   - check the authorizer's log for denials of the new principals;
+   - remove the old ACLs and the DN entries of `super.users`;
+   - remove spiffe-helper and delete the PEM files: they hold private keys.
+
+### From java-spiffe's JCA provider
+
+A broker that gets its SVIDs from [java-spiffe](https://github.com/spiffe/java-spiffe)'s JCA provider has no files already: `java.security` registers the provider, and the listener's `ssl.keymanager.algorithm=Spiffe` and `ssl.trustmanager.algorithm=Spiffe` name it. Take a single-node KRaft broker on the `apache/kafka` image, with a mutual-TLS listener `MTLS`, plaintext `INTERNAL` and `CONTROLLER` listeners on the loopback interface, no authorizer, and an agent that delivers a federated trust domain's bundle beside its own. Today it has:
+
+| Where | With java-spiffe's provider | With kafka-spiffe |
+|---|---|---|
+| Class path (`CLASSPATH` or `libs/`) | the provider's jar and its dependencies | the kafka-spiffe jar alone |
+| `KAFKA_OPTS` | `-Djava.security.properties=…` registering the provider | nothing |
+| `KAFKA_OPTS` | `-Dssl.spiffe.acceptAll=true`, or `-Dssl.spiffe.accept=<IDs>` | `spiffe.peer.allowed.trust.domains`, or `spiffe.peer.allowed.ids` and `.id.patterns` |
+| `KAFKA_OPTS` | `-Dspiffe.newX509Source.timeout=PT120S`, an ISO-8601 duration; unset or `PT0S` waits for ever | `spiffe.startup.timeout.ms=120000`, in milliseconds: convert the duration (`PT2M` is `120000`). Waiting for ever is `-1`; `0` here means not waiting at all. Unset, it is two minutes |
+| `KAFKA_OPTS` | `-Djava.util.logging.config.file=…` for the provider's own log | nothing: the library logs through slf4j, under `io.github.bpalermo.kafka.spiffe`, with Kafka's logging configuration |
+| `server.properties` | `listener.name.mtls.ssl.keymanager.algorithm=Spiffe` and `listener.name.mtls.ssl.trustmanager.algorithm=Spiffe` | `ssl.engine.factory.class` and `principal.builder.class`, unprefixed (they apply to the TLS listeners only) |
+| `server.properties` | `listener.name.mtls.ssl.client.auth=required` | `ssl.client.auth=required`, unprefixed like the other two; the listener-prefixed form also reaches the factory, but one place for all three is easier to read |
+| Environment | `SPIFFE_ENDPOINT_SOCKET` | `spiffe.endpoint.socket` in `server.properties`, so the broker's whole configuration is in one file; the library still reads `SPIFFE_ENDPOINT_SOCKET` when the key is not set |
+
+`spiffe.*` keys are set unprefixed only: there is no `listener.name.mtls.spiffe.*`. After the swap, `server.properties` has, in place of the two algorithm keys and the prefixed `ssl.client.auth`:
+
+```properties
+ssl.engine.factory.class=io.github.bpalermo.kafka.spiffe.kafka.SpiffeSslEngineFactory
+principal.builder.class=io.github.bpalermo.kafka.spiffe.kafka.SpiffePrincipalBuilder
+ssl.client.auth=required
+spiffe.endpoint.socket=unix:///run/spire/sockets/agent.sock
+spiffe.peer.allowed.trust.domains=nas.example.org,k8s.example.org
+spiffe.startup.timeout.ms=120000
+```
+
+- **`acceptAll` has no equivalent.** It accepted every trust domain whose bundle the agent delivers, so a newly federated trust domain was let in without a change on the broker. Here the allow-list is explicit, and a new federation means a new entry and a restart. Either list every trust domain, the broker's own and each federated one, as above; or, narrower, allow only the workloads that should connect, by `spiffe.peer.allowed.ids` and `spiffe.peer.allowed.id.patterns` (for instance `spiffe://k8s.example.org/ns/*/sa/**`), together with the broker's own ID.
+- **With no authorizer, the swap is one restart.** Principals decide nothing, so there are no ACLs to move; the steps above apply only once an authorizer is added. `principal.builder.class` is there so that the principals are `Spiffe:` ones when that day comes, and to check the swap now: with `io.github.bpalermo.kafka.spiffe.kafka.SpiffePrincipalBuilder` at `DEBUG`, each connection logs `spiffe://… on listener MTLS from /10.0.0.5 gets Spiffe:spiffe://…` once. `peer-verification`'s `accepted-total` counts the same handshakes ([JMX](#jmx)).
+- **Clients need no change.** A client on java-spiffe's provider or on spiffe-helper's PEM files presents the same SVID as before and finds the broker's SVID unchanged: same SPIFFE ID, same bundles. The switched broker verifies the client's SVID against its allow-list. Tests check clients on PEM files against a switched broker, and a provider client sends the same certificates.
+- **An expired SVID:** the provider goes on serving it with nothing in Kafka's log. The library also keeps serving it by default (`spiffe.svid.expired=present`), but logs an error and a warning before it ([Logs](#logs)), and `spiffe.svid.expired=fail` refuses new connections instead.
+- **To roll back,** restore the whole previous `server.properties` (the two algorithm keys and the prefixed `ssl.client.auth` back, `ssl.engine.factory.class`, `principal.builder.class` and the `spiffe.*` keys out: left in, Kafka would still load the library, or fail to start without its jar), the provider's jars and `KAFKA_OPTS`, and restart.
 
 ## Watching it
 
@@ -255,6 +307,8 @@ The counts cover every factory of the process and only grow.
 | `rejected-chain-total` | A chain that does not verify against its trust domain's bundle, or not for this purpose |
 | `rejected-id-not-allowed-total` | A valid SVID whose ID the peer allow-list does not cover |
 
+A client that sends no certificate at all, such as a monitoring probe that only checks the broker's certificate, is refused by the JDK before any verification, on TLS 1.2 and 1.3 alike (`Empty client certificate chain`). It is in none of these counts, so a probe every few minutes needs no allowance in an alert on `rejected-total`; Kafka logs its own failed-authentication line for it.
+
 The Prometheus JMX exporter on a broker picks the MBeans up with `includeObjectNames: ["kafka.spiffe:*"]` added to its configuration. Worth an alert:
 
 - `svid-ttl-remaining-ms` below a third of the SVID's lifetime. SPIRE rotates at about half, so a rotation is overdue.
@@ -277,6 +331,7 @@ Logs go through slf4j, so Kafka's logging configuration applies; the loggers are
 - **The stream:** each time it ends, and why.
 - **Refused updates:** each update the library refuses, and why.
 - **Refused peers**, at most ten lines a minute: `Refused a TLS client in the handshake (id-not-allowed): the peer spiffe://… is not allowed`. The reason is one of those the MBean counts.
+- **Principals, at `DEBUG`:** once per connection, `spiffe://… on listener MTLS from /10.0.0.5 gets Spiffe:spiffe://…`, from the logger `io.github.bpalermo.kafka.spiffe.kafka.SpiffePrincipalBuilder`. A peer that gets the unauthorized principal is logged at `WARN` instead, at a limited rate.
 
 ### When the Workload API goes away
 

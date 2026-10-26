@@ -546,6 +546,54 @@ class SpiffeSslEngineFactoryTest {
             .anyMatch(name -> name.getDomain().isEmpty() || "null".equals(name.getDomain())));
   }
 
+  /**
+   * A TLS probe that sends no certificate, as a monitoring check of the broker's own certificate
+   * does: the JDK refuses it before any trust manager runs, so the peer-verification counts do not
+   * move.
+   */
+  @Test
+  void aClientWithNoCertificateIsRefusedByTheJdkAndNotCounted() throws Exception {
+    String domain = "test.no.certificate";
+    Map<String, Object> broker = brokerConfigs();
+    broker.put("spiffe.metrics.jmx.domain", domain);
+    SpiffeSslEngineFactory brokerFactory = factory(broker);
+    for (String protocol : List.of("TLSv1.2", "TLSv1.3")) {
+      javax.net.ssl.SSLContext context = javax.net.ssl.SSLContext.getInstance(protocol);
+      context.init(null, new javax.net.ssl.TrustManager[] {new TrustingEveryone()}, null);
+      SSLEngine probe = context.createSSLEngine("10.0.0.2", 9093);
+      probe.setUseClientMode(true);
+      probe.setEnabledProtocols(new String[] {protocol});
+      SSLException refused =
+          assertThrows(
+              SSLException.class,
+              () -> Handshake.run(probe, brokerFactory.createServerSslEngine("10.0.0.1", 50000)));
+      assertTrue(
+          String.valueOf(refused.getMessage()).contains("Empty client certificate chain"),
+          protocol + ": " + refused);
+    }
+    PeerVerificationStats stats = PeerVerificationStats.of(domain);
+    assertEquals(0, stats.server().accepted());
+    assertEquals(0, stats.server().rejectedTotal());
+    // The counts are the broker factory's: a client with its SVID is counted.
+    connect(factory(clientConfigs()), brokerFactory);
+    assertEquals(1, stats.server().accepted());
+    assertEquals(0, stats.server().rejectedTotal());
+  }
+
+  /** The probe checks nothing of the broker's certificate. */
+  private static final class TrustingEveryone implements javax.net.ssl.X509TrustManager {
+    @Override
+    public void checkClientTrusted(X509Certificate[] chain, String authType) {}
+
+    @Override
+    public void checkServerTrusted(X509Certificate[] chain, String authType) {}
+
+    @Override
+    public X509Certificate[] getAcceptedIssuers() {
+      return new X509Certificate[0];
+    }
+  }
+
   @Test
   void handshakesAreCountedInThePeerVerificationMBeans() throws Exception {
     // A JMX domain of this test's own: the counts are the process's, per domain.

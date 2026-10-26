@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import javax.security.auth.x500.X500Principal;
 import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -128,6 +129,7 @@ public final class TestPki {
     private List<KeyPurposeId> purposes =
         List.of(KeyPurposeId.id_kp_serverAuth, KeyPurposeId.id_kp_clientAuth);
     private boolean rsa;
+    private String dn = "O=SPIFFE";
 
     private LeafBuilder(Authority issuer) {
       this.issuer = issuer;
@@ -141,6 +143,15 @@ public final class TestPki {
     public LeafBuilder validity(Instant from, Instant to) {
       notBefore = from;
       notAfter = to;
+      return this;
+    }
+
+    /**
+     * The subject DN, {@code O=SPIFFE} by default: what a DN principal is made of. Read as the JDK
+     * reads it, so that {@code getSubjectX500Principal().getName()} gives it back.
+     */
+    public LeafBuilder dn(String value) {
+      dn = value;
       return this;
     }
 
@@ -169,7 +180,12 @@ public final class TestPki {
     public Issued issue() {
       KeyPair keys = rsa ? rsaKeys() : ec();
       X509v3CertificateBuilder builder =
-          builder(subject(issuer.certificate), new X500Name("O=SPIFFE"), keys, notBefore, notAfter);
+          builder(
+              subject(issuer.certificate),
+              X500Name.getInstance(new X500Principal(dn).getEncoded()),
+              keys,
+              notBefore,
+              notAfter);
       if (!uris.isEmpty()) {
         extension(
             builder,

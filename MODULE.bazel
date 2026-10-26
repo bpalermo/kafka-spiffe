@@ -164,6 +164,15 @@ KAFKA_EXCLUDED = [
             ],
         ),
         (
+            "4_3",
+            "4.3.2",
+            [
+                "org.apache.kafka:kafka-metadata:{v}",
+                "org.apache.kafka:kafka_2.13:{v}",
+                "org.apache.kafka:kafka-test-common-runtime:{v}",
+            ],
+        ),
+        (
             "4_4",
             "4.4.0",
             [
@@ -183,6 +192,7 @@ use_repo(
     "kafka_3_3",
     "kafka_3_9",
     "kafka_4_0",
+    "kafka_4_3",
     "kafka_4_4",
     "maven",
 )
