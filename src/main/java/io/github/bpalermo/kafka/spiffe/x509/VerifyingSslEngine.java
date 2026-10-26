@@ -30,9 +30,12 @@ import javax.net.ssl.SSLSession;
  * that sends the buffer from its position to its limit without flipping it, as Kafka 3.0's {@code
  * SslTransportLayer} does after a failed handshake step, sends nothing.
  *
- * <p>Each handshake is checked once it finishes: the first, and one this engine begins again with
- * {@link #beginHandshake}. A TLS 1.2 renegotiation the peer starts is not checked again; Kafka
- * refuses renegotiation, and it is a full handshake unless it resumes a session.
+ * <p>Each handshake is checked once it finishes: the first, and a TLS 1.2 renegotiation this engine
+ * begins with {@link #beginHandshake}. On TLS 1.3, {@code beginHandshake} on an established
+ * connection sends a KeyUpdate, which is no handshake and verifies nobody, so it is not checked: a
+ * long-lived connection is not refused because its peer's SVID has expired since it was made. A TLS
+ * 1.2 renegotiation the peer starts is not checked again; Kafka refuses renegotiation, and it is a
+ * full handshake unless it resumes a session.
  */
 final class VerifyingSslEngine extends SSLEngine {
 
@@ -228,8 +231,9 @@ final class VerifyingSslEngine extends SSLEngine {
 
   @Override
   public synchronized void beginHandshake() throws SSLException {
-    if (checked) {
-      // A new handshake on this connection: it is checked when it finishes, as the first was.
+    if (checked && !"TLSv1.3".equals(engine.getSession().getProtocol())) {
+      // A renegotiation: checked when it finishes, as the first handshake was. TLS 1.3 has none;
+      // there this is a KeyUpdate.
       checked = false;
       verifiedInHandshake.set(false);
     }
