@@ -61,15 +61,39 @@ public final class ZooKeeperCluster implements BrokerCluster {
 
   @Override
   public void stop() throws Exception {
+    // Every step runs whatever an earlier one threw; the first failure is thrown at the end.
+    List<Exception> failures = new ArrayList<>();
     for (KafkaServer server : servers) {
-      server.shutdown();
-      server.awaitShutdown();
+      attempt(
+          failures,
+          () -> {
+            server.shutdown();
+            server.awaitShutdown();
+          });
     }
     if (zookeeper != null) {
-      zookeeper.shutdown();
+      attempt(failures, zookeeper::shutdown);
     }
     for (Path directory : directories) {
-      Utils.delete(directory.toFile());
+      attempt(failures, () -> Utils.delete(directory.toFile()));
+    }
+    if (!failures.isEmpty()) {
+      Exception first = failures.get(0);
+      failures.stream().skip(1).forEach(first::addSuppressed);
+      throw first;
+    }
+  }
+
+  /** One step of {@link #stop}. */
+  private interface Step {
+    void run() throws Exception;
+  }
+
+  private static void attempt(List<Exception> failures, Step step) {
+    try {
+      step.run();
+    } catch (Exception e) {
+      failures.add(e);
     }
   }
 }
