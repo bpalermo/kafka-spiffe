@@ -292,6 +292,96 @@ class SnapshotSslContextTest {
     }
   }
 
+  /**
+   * {@code beginHandshake} on an established connection: on TLS 1.3 it is a KeyUpdate, which
+   * verifies nobody, so the connection goes on although the peer's SVID has since expired by the
+   * client's clock; on TLS 1.2 it is a renegotiation, a handshake whose peer is verified again, and
+   * refused.
+   */
+  @Test
+  void beginningAHandshakeAgainChecksTheRenegotiationOfTls12ButNotTheKeyUpdateOfTls13()
+      throws Exception {
+    for (String protocol : List.of("TLSv1.3", "TLSv1.2")) {
+      MovableClock clientClock = new MovableClock();
+      SSLContext client = clientContext(protocol, clientClock, new Counting());
+      SSLContext broker = brokerContext(protocol, CLOCK, new Counting());
+      VerifyingSslEngine[] connection = engines(client, broker);
+      Handshake.run(connection[0], connection[1]);
+      exchange(connection[0], connection[1]);
+      clientClock.set(TestPki.NOW.plus(Duration.ofHours(2)));
+      if (protocol.equals("TLSv1.3")) {
+        rehandshake(connection[0], connection[1]);
+        exchange(connection[0], connection[1]);
+      } else {
+        SSLException e =
+            assertThrows(
+                SSLException.class,
+                () -> {
+                  rehandshake(connection[0], connection[1]);
+                  exchange(connection[0], connection[1]);
+                });
+        assertEquals(PeerRejectedException.Reason.CHAIN, reasonOf(e));
+      }
+    }
+  }
+
+  /** The client begins a handshake again, and both engines go on until neither has more to do. */
+  private static void rehandshake(SSLEngine client, SSLEngine broker) throws SSLException {
+    client.beginHandshake();
+    ByteBuffer toBroker = ByteBuffer.allocate(client.getSession().getPacketBufferSize() * 4);
+    ByteBuffer toClient = ByteBuffer.allocate(broker.getSession().getPacketBufferSize() * 4);
+    ByteBuffer empty = ByteBuffer.allocate(0);
+    ByteBuffer sink = ByteBuffer.allocate(client.getSession().getApplicationBufferSize());
+    for (int round = 0; round < 100; round++) {
+      boolean idle =
+          client.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING
+              && broker.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING
+              && toBroker.position() == 0
+              && toClient.position() == 0;
+      if (idle) {
+        return;
+      }
+      pump(client, toBroker, toClient, empty, sink);
+      pump(broker, toClient, toBroker, empty, sink);
+    }
+    throw new AssertionError("the handshake did not settle");
+  }
+
+  private static void pump(
+      SSLEngine engine, ByteBuffer out, ByteBuffer in, ByteBuffer empty, ByteBuffer sink)
+      throws SSLException {
+    Runnable task;
+    while ((task = engine.getDelegatedTask()) != null) {
+      task.run();
+    }
+    if (engine.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+      engine.wrap(empty, out);
+    }
+    if (in.position() > 0) {
+      in.flip();
+      sink.clear();
+      engine.unwrap(in, sink);
+      in.compact();
+    }
+  }
+
+  /** A record of application data each way. */
+  private static void exchange(SSLEngine client, SSLEngine broker) throws SSLException {
+    send(client, broker);
+    send(broker, client);
+  }
+
+  private static void send(SSLEngine from, SSLEngine to) throws SSLException {
+    ByteBuffer net = ByteBuffer.allocate(from.getSession().getPacketBufferSize());
+    from.wrap(ByteBuffer.wrap("ping".getBytes(StandardCharsets.US_ASCII)), net);
+    net.flip();
+    ByteBuffer plain = ByteBuffer.allocate(to.getSession().getApplicationBufferSize());
+    while (net.hasRemaining()) {
+      to.unwrap(net, plain);
+    }
+    assertEquals(4, plain.position(), "the record arrived");
+  }
+
   /** A client engine and a broker engine, as {@link #toBroker} makes them. */
   private static VerifyingSslEngine[] engines(SSLContext client, SSLContext broker) {
     SSLEngine clientEngine = client.createSSLEngine("broker.example.org", 9093);
