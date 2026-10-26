@@ -23,9 +23,8 @@ import javax.net.ssl.TrustManager;
 final class VerifyingSslContext extends SSLContext {
 
   /**
-   * The engines whose handshake is not yet checked, by the JDK engine the trust manager is handed,
-   * each with the flag it sets. The values hold no engine, so an engine dropped mid-handshake is
-   * collected.
+   * The engines of the context, by the JDK engine the trust manager is handed, each with the flag
+   * it sets. The values hold no engine, so an engine no longer used is collected.
    */
   static final class Engines {
     private final Map<SSLEngine, AtomicBoolean> pending =
@@ -42,7 +41,7 @@ final class VerifyingSslContext extends SSLContext {
     VerifyingSslEngine wrap(SSLEngine engine, SpiffeTrustManager trust) {
       AtomicBoolean flag = new AtomicBoolean();
       pending.put(engine, flag);
-      return new VerifyingSslEngine(engine, trust, flag, () -> pending.remove(engine));
+      return new VerifyingSslEngine(engine, trust, flag);
     }
   }
 

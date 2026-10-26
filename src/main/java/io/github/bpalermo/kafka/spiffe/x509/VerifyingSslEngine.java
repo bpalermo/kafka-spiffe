@@ -24,31 +24,34 @@ import javax.net.ssl.SSLSession;
  * has not verified the peer of this engine, the peer's certificates in the session are verified by
  * that trust manager, at its clock, and a refusal fails the handshake: the bytes of that last step
  * are withheld, the outbound side is closed, and the exception is thrown again on reading.
+ *
+ * <p>Withheld means overwritten with zeros and taken back: each destination buffer's position goes
+ * back to where it was. A refused {@code wrap} also sets its buffer's limit there, so that a caller
+ * that sends the buffer from its position to its limit without flipping it, as Kafka 3.0's {@code
+ * SslTransportLayer} does after a failed handshake step, sends nothing.
+ *
+ * <p>Each handshake is checked once it finishes: the first, and one this engine begins again with
+ * {@link #beginHandshake}. A TLS 1.2 renegotiation the peer starts is not checked again; Kafka
+ * refuses renegotiation, and it is a full handshake unless it resumes a session.
  */
 final class VerifyingSslEngine extends SSLEngine {
 
   private final SSLEngine engine;
   private final SpiffeTrustManager trust;
   private final AtomicBoolean verifiedInHandshake;
-  private final Runnable forget;
   private boolean checked;
   private boolean verifiedAgain;
   private SSLHandshakeException refused;
 
   /**
    * @param verifiedInHandshake set by the trust manager when it verifies this engine's peer
-   * @param forget run once the handshake is checked, so the context stops tracking the engine
    */
   VerifyingSslEngine(
-      SSLEngine engine,
-      SpiffeTrustManager trust,
-      AtomicBoolean verifiedInHandshake,
-      Runnable forget) {
+      SSLEngine engine, SpiffeTrustManager trust, AtomicBoolean verifiedInHandshake) {
     super(engine.getPeerHost(), engine.getPeerPort());
     this.engine = engine;
     this.trust = trust;
     this.verifiedInHandshake = verifiedInHandshake;
-    this.forget = forget;
   }
 
   /** Whether the peer was verified here rather than by the handshake: a resumed session's. */
@@ -67,7 +70,8 @@ final class VerifyingSslEngine extends SSLEngine {
       try {
         check();
       } catch (SSLException e) {
-        dst.position(position);
+        withhold(dst, position);
+        dst.limit(position);
         throw e;
       }
     }
@@ -80,19 +84,37 @@ final class VerifyingSslEngine extends SSLEngine {
     if (refused != null) {
       throw refused;
     }
+    int[] positions = new int[length];
+    for (int i = 0; i < length; i++) {
+      positions[i] = dsts[offset + i].position();
+    }
     SSLEngineResult result = engine.unwrap(src, dsts, offset, length);
     if (!checked
         && (result.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.FINISHED
             || result.bytesProduced() > 0)) {
-      check();
+      try {
+        check();
+      } catch (SSLException e) {
+        for (int i = 0; i < length; i++) {
+          withhold(dsts[offset + i], positions[i]);
+        }
+        throw e;
+      }
     }
     return result;
+  }
+
+  /** Overwrites what was written to {@code buffer} since {@code position}, and takes it back. */
+  private static void withhold(ByteBuffer buffer, int position) {
+    for (int i = position; i < buffer.position(); i++) {
+      buffer.put(i, (byte) 0);
+    }
+    buffer.position(position);
   }
 
   /** Verifies the peer again unless the handshake's trust manager did. */
   private void check() throws SSLHandshakeException {
     checked = true;
-    forget.run();
     if (verifiedInHandshake.get()) {
       return;
     }
@@ -205,7 +227,12 @@ final class VerifyingSslEngine extends SSLEngine {
   }
 
   @Override
-  public void beginHandshake() throws SSLException {
+  public synchronized void beginHandshake() throws SSLException {
+    if (checked) {
+      // A new handshake on this connection: it is checked when it finishes, as the first was.
+      checked = false;
+      verifiedInHandshake.set(false);
+    }
     engine.beginHandshake();
   }
 

@@ -109,6 +109,10 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   /**
    * A trust manager over one snapshot's bundles.
    *
+   * <p>Verifies full handshakes only: the JDK does not call a trust manager when it resumes a
+   * session. {@link SnapshotSslContext} makes contexts whose engines verify resumed sessions too; a
+   * context of your own made with this trust manager does not.
+   *
    * @param bundles the bundles peers are verified against
    * @param peers the SPIFFE IDs accepted of peers
    * @param clock the time chains are validated at
@@ -120,6 +124,10 @@ public final class SpiffeTrustManager extends X509ExtendedTrustManager {
   /**
    * A trust manager over one snapshot's bundles that tells {@code observer} what each handshake's
    * verification came to.
+   *
+   * <p>Verifies full handshakes only: the JDK does not call a trust manager when it resumes a
+   * session. {@link SnapshotSslContext} makes contexts whose engines verify resumed sessions too; a
+   * context of your own made with this trust manager does not.
    *
    * @param bundles the bundles peers are verified against
    * @param peers the SPIFFE IDs accepted of peers

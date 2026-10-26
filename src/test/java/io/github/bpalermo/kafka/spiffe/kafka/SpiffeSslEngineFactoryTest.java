@@ -261,18 +261,39 @@ class SpiffeSslEngineFactoryTest {
   @Test
   void aResumedSessionWhosePeerHasExpiredIsRefusedOnEitherSide() throws Exception {
     for (boolean byTheClient : List.of(true, false)) {
-      MovableClock moved = new MovableClock();
-      SpiffeSslEngineFactory client =
-          byTheClient ? factory(clientConfigs(), moved) : factory(clientConfigs());
-      SpiffeSslEngineFactory broker =
-          byTheClient ? factory(brokerConfigs()) : factory(brokerConfigs(), moved);
-      connect(client, broker);
-      moved.set(TestPki.NOW.plus(Duration.ofHours(2)));
-      assertEquals(
-          PeerRejectedException.Reason.CHAIN,
-          refusal(() -> connect(client, broker)),
-          byTheClient ? "the client" : "the broker");
+      String side = byTheClient ? "the client" : "the broker";
+      boolean resumedOnce = false;
+      // A reconnection more than a second later is a full handshake: try again.
+      for (int attempt = 0; attempt < 5 && !resumedOnce; attempt++) {
+        MovableClock moved = new MovableClock();
+        SpiffeSslEngineFactory client =
+            byTheClient ? factory(clientConfigs(), moved) : factory(clientConfigs());
+        SpiffeSslEngineFactory broker =
+            byTheClient ? factory(brokerConfigs()) : factory(brokerConfigs(), moved);
+        connect(client, broker);
+        moved.set(TestPki.NOW.plus(Duration.ofHours(2)));
+        SSLException e = assertThrows(SSLException.class, () -> connect(client, broker));
+        if (!messageOf(e).contains("the peer of a resumed session is refused")) {
+          continue;
+        }
+        resumedOnce = true;
+        assertEquals(PeerRejectedException.Reason.CHAIN, refusal(() -> rethrow(e)), side);
+      }
+      assertTrue(resumedOnce, side + ": the JDK never resumed a session");
     }
+  }
+
+  private static void rethrow(SSLException e) throws SSLException {
+    throw e;
+  }
+
+  /** The messages of {@code e} and its causes. */
+  private static String messageOf(Throwable e) {
+    StringBuilder messages = new StringBuilder();
+    for (Throwable t = e; t != null; t = t.getCause()) {
+      messages.append(t.getMessage()).append('\n');
+    }
+    return messages.toString();
   }
 
   /**
