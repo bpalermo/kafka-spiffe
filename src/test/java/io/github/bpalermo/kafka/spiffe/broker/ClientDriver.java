@@ -34,10 +34,10 @@ import org.apache.kafka.common.serialization.StringSerializer;
  * producing five records and consuming them back. It then reads a number from its standard input,
  * waits until its Workload API source has taken that many updates, does another round on the same
  * clients and prints {@code round <connections>} again; reads another line, waits until the broker
- * has closed every connection of the producer as idle, and prints {@code fresh <before> <after>}
- * once the same producer, on a new connection, has had a record acknowledged, with its {@code
- * connection-creation-total} before and after. {@code <connections>} is the producer's and the
- * consumer's {@code connection-creation-total}. A failure is an exception, which exits 1.
+ * has closed the producer's idle connection and the producer has opened a new one, and prints
+ * {@code fresh <before> <after>} once the same producer has had a record acknowledged, with its
+ * {@code connection-creation-total} before and after. {@code <connections>} is the producer's and
+ * the consumer's {@code connection-creation-total}. A failure is an exception, which exits 1.
  *
  * <p>Arguments: the bootstrap servers, the Workload API socket, the broker's SPIFFE ID, the topic.
  */
@@ -95,13 +95,15 @@ public final class ClientDriver {
       round(producer, consumer, topic);
       out.println("round " + (connections(producer.metrics()) + connections(consumer.metrics())));
       line(in);
-      // The same producer, once the broker has closed its connections as idle: its next record goes
+      // The same producer, once the broker has closed its connection as idle: its next record goes
       // over a new connection, whose engine its factory makes from the source's newest snapshot.
       double before = connections(producer.metrics());
       Instant deadline = Instant.now().plus(WAIT);
-      while (open(producer.metrics()) > 0) {
+      // Once the broker closes its idle connection, the producer reconnects at once, for metadata:
+      // so a new connection, not the moment with none, is what to wait for.
+      while (connections(producer.metrics()) <= before) {
         if (Instant.now().isAfter(deadline)) {
-          throw new IllegalStateException("the broker did not close the idle connections");
+          throw new IllegalStateException("the producer opened no new connection");
         }
         Thread.sleep(100);
       }
@@ -152,18 +154,6 @@ public final class ClientDriver {
         }
       }
     }
-  }
-
-  /** The producer's {@code connection-count}: its connections open now. */
-  private static double open(Map<MetricName, ? extends Metric> metrics) {
-    double total = 0;
-    for (Map.Entry<MetricName, ? extends Metric> metric : metrics.entrySet()) {
-      MetricName name = metric.getKey();
-      if (name.name().equals("connection-count") && name.group().equals("producer-metrics")) {
-        total += ((Number) metric.getValue().metricValue()).doubleValue();
-      }
-    }
-    return total;
   }
 
   private static double connections(Map<MetricName, ? extends Metric> metrics) {
