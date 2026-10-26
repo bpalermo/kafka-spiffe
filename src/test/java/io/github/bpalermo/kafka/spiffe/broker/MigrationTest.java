@@ -305,6 +305,12 @@ class MigrationTest {
 
   private KafkaProducer<String, String> producer(Map<String, Object> configs) {
     configs.put("acks", "all");
+    // Idempotence (the default from 3.0) has the producer ask any broker for a producer ID first,
+    // which needs a write ACL there: from a broker that has not yet applied one, or from the
+    // switched broker for LEGACY, the refusal leaves the producer in a fatal error state, and send
+    // throws it at once rather than failing the record. Which broker answers is chance, so the
+    // records alone are left to say what each broker allows.
+    configs.put("enable.idempotence", "false");
     KafkaProducer<String, String> producer =
         new KafkaProducer<>(configs, new StringSerializer(), new StringSerializer());
     closeables.add(producer);
