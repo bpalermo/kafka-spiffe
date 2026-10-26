@@ -235,7 +235,7 @@ flowchart LR
    - **A broker not yet switched** keeps working with the switched ones. Its truststore must hold every trust domain a client or a broker comes from, and its `ssl.endpoint.identification.algorithm` must stay empty: it checks a switched broker's certificate as it checked the old one. A switched broker presents the same kind of SVID it got through spiffe-helper, from the same agent, so the old `super.users` entries still name it there.
    - **To roll a broker back,** restore its previous configuration and its spiffe-helper; the old ACLs are still there.
 4. **Switch the clients**, in any order: each gets the jar and its `spiffe.*` keys ([Clients](#clients)) instead of a keystore and a truststore, and its spiffe-helper stops. Clients can start before the last broker is switched: an old broker verifies a switched client's SVID against its truststore, as before.
-5. **Clean up** once every broker and client is switched:
+5. **Clean up** once every broker and client is switched, and every KRaft controller whose listener is TLS too: a controller still on Kafka's own builder knows the brokers by DN, so switch it as in step 3 first, or keep its DN entries and files:
    - check the authorizer's log for denials of the new principals;
    - remove the old ACLs and the DN entries of `super.users`;
    - remove spiffe-helper and delete the PEM files: they hold private keys.
@@ -249,7 +249,7 @@ A broker that gets its SVIDs from [java-spiffe](https://github.com/spiffe/java-s
 | Class path (`CLASSPATH` or `libs/`) | the provider's jar and its dependencies | the kafka-spiffe jar alone |
 | `KAFKA_OPTS` | `-Djava.security.properties=…` registering the provider | nothing |
 | `KAFKA_OPTS` | `-Dssl.spiffe.acceptAll=true`, or `-Dssl.spiffe.accept=<IDs>` | `spiffe.peer.allowed.trust.domains`, or `spiffe.peer.allowed.ids` and `.id.patterns` |
-| `KAFKA_OPTS` | `-Dspiffe.newX509Source.timeout=PT120S` | `spiffe.startup.timeout.ms=120000` |
+| `KAFKA_OPTS` | `-Dspiffe.newX509Source.timeout=PT120S`, an ISO-8601 duration; unset or `PT0S` waits for ever | `spiffe.startup.timeout.ms=120000`, in milliseconds: convert the duration (`PT2M` is `120000`). Waiting for ever is `-1`; `0` here means not waiting at all. Unset, it is two minutes |
 | `KAFKA_OPTS` | `-Djava.util.logging.config.file=…` for the provider's own log | nothing: the library logs through slf4j, under `io.github.bpalermo.kafka.spiffe`, with Kafka's logging configuration |
 | `server.properties` | `listener.name.mtls.ssl.keymanager.algorithm=Spiffe` and `listener.name.mtls.ssl.trustmanager.algorithm=Spiffe` | `ssl.engine.factory.class` and `principal.builder.class`, unprefixed (they apply to the TLS listeners only) |
 | `server.properties` | `listener.name.mtls.ssl.client.auth=required` | `ssl.client.auth=required`, unprefixed like the other two; the listener-prefixed form also reaches the factory, but one place for all three is easier to read |
@@ -270,7 +270,7 @@ spiffe.startup.timeout.ms=120000
 - **With no authorizer, the swap is one restart.** Principals decide nothing, so there are no ACLs to move; the steps above apply only once an authorizer is added. `principal.builder.class` is there so that the principals are `Spiffe:` ones when that day comes, and to check the swap now: with `io.github.bpalermo.kafka.spiffe.kafka.SpiffePrincipalBuilder` at `DEBUG`, each connection logs `spiffe://… on listener MTLS from /10.0.0.5 gets Spiffe:spiffe://…` once. `peer-verification`'s `accepted-total` counts the same handshakes ([JMX](#jmx)).
 - **Clients need no change.** A client on java-spiffe's provider or on spiffe-helper's PEM files presents the same SVID as before and finds the broker's SVID unchanged: same SPIFFE ID, same bundles. The switched broker verifies the client's SVID against its allow-list. Tests check clients on PEM files against a switched broker, and a provider client sends the same certificates.
 - **An expired SVID:** the provider goes on serving it with nothing in Kafka's log. The library also keeps serving it by default (`spiffe.svid.expired=present`), but logs an error and a warning before it ([Logs](#logs)), and `spiffe.svid.expired=fail` refuses new connections instead.
-- **To roll back,** restore the provider's jars, `KAFKA_OPTS` and the two algorithm keys, and restart.
+- **To roll back,** restore the whole previous `server.properties` (the two algorithm keys and the prefixed `ssl.client.auth` back, `ssl.engine.factory.class`, `principal.builder.class` and the `spiffe.*` keys out: left in, Kafka would still load the library, or fail to start without its jar), the provider's jars and `KAFKA_OPTS`, and restart.
 
 ## Watching it
 
