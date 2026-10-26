@@ -367,7 +367,7 @@ cosign verify-blob \
   kafka-spiffe-X.Y.Z.jar
 ```
 
-The jar and POM attached to a release are the same files as on Maven Central, so a bundle verifies the jar from Central too. That holds from the release after 0.3.0: up to 0.3.0 the two jars were built separately and differ in a class-file flag of one class (`PrincipalPolicy`), with the same code, so a 0.2.0 or 0.3.0 bundle verifies only the jar attached to the GitHub release.
+The jar and POM attached to a release are the same files as on Maven Central, so a bundle verifies the jar from Central too. That holds from the release after 0.3.0: up to 0.3.0 the two jars were built separately and differ in a class-file flag of one class (`PrincipalPolicy`), with the same code, so a 0.2.0 or 0.3.0 bundle verifies only the jar attached to the GitHub release. Those two Central jars were compiled against the JDK 25 class library rather than 17, but the InnerClasses flag is the only difference, so they call no API later than Java 17.
 
 Artifacts on Maven Central are signed with the release key:
 - **Fingerprint:** `1AD8 BBC7 819C 4FFC 7ECB 0DC0 8D76 0DEA 50D2 412D`, RSA 4096, until 2029-10-24.

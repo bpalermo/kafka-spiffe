@@ -134,6 +134,10 @@ jobs:
           VERIFIED_POM: ${{ needs.verify.outputs.pom }}
         run: |
           set -euo pipefail
+          if [ -z "${VERIFIED_JAR}" ] || [ -z "${VERIFIED_POM}" ]; then
+            echo "::error::the verify job recorded no digest" >&2
+            exit 1
+          fi
           expected="$(printf 'jar=%s\npom=%s' "${VERIFIED_JAR}" "${VERIFIED_POM}")"
           actual="$(scripts/artifact-digests.sh)"
           if [ "${actual}" != "${expected}" ]; then
@@ -263,8 +267,12 @@ jobs:
           VERIFIED_POM: ${{ needs.verify.outputs.pom }}
         run: |
           set -euo pipefail
+          if [ -z "${VERIFIED_JAR}" ] || [ -z "${VERIFIED_POM}" ]; then
+            echo "::error::the verify job recorded no digest" >&2
+            exit 1
+          fi
           expected="$(printf 'jar=%s\npom=%s' "${VERIFIED_JAR}" "${VERIFIED_POM}")"
-          actual="$(scripts/artifact-digests.sh)"
+          actual="$(scripts/artifact-digests.sh dist/*.jar dist/*.pom)"
           if [ "${actual}" != "${expected}" ]; then
             printf '::error::the jar or POM to sign is not the one verify built\nverify:\n%s\nhere:\n%s\n' "${expected}" "${actual}" >&2
             exit 1
