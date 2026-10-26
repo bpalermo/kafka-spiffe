@@ -189,7 +189,9 @@ class KafkaE2eTest {
         "--group",
         "payments");
 
-    // One record a second on one producer, while both agents are replaced in turn.
+    // One record a second on one producer, while both agents are replaced in turn. Not
+    // idempotent: its producer ID request, refused by a broker that has not yet applied the
+    // ACLs above, would stop it for good.
     Instant started = Instant.now();
     SpireDomain.exec(
         client,
@@ -200,7 +202,8 @@ class KafkaE2eTest {
                 + " i=0; while [ $i -lt %d ]; do echo order-$i; i=$((i+1)); sleep 1; done"
                 + " | %skafka-console-producer.sh --bootstrap-server broker:9093"
                 + " --producer.config /tmp/client.properties --topic orders"
-                + " --producer-property acks=all > /tmp/producer.log 2>&1;"
+                + " --producer-property acks=all --producer-property enable.idempotence=false"
+                + " > /tmp/producer.log 2>&1;"
                 + " echo $? > /tmp/producer.exit")
             .formatted(RECORDS, BIN)
             .transform(script -> "nohup sh -c '" + script + "' > /dev/null 2>&1 &"));
