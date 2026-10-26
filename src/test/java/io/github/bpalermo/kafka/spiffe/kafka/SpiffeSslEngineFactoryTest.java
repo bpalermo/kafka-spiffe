@@ -489,6 +489,10 @@ class SpiffeSslEngineFactoryTest {
     PeerVerificationStats stats = PeerVerificationStats.of(domain);
     assertEquals(0, stats.server().accepted());
     assertEquals(0, stats.server().rejectedTotal());
+    // The counts are the broker factory's: a client with its SVID is counted.
+    connect(factory(clientConfigs()), brokerFactory);
+    assertEquals(1, stats.server().accepted());
+    assertEquals(0, stats.server().rejectedTotal());
   }
 
   /** The probe checks nothing of the broker's certificate. */

@@ -361,7 +361,7 @@ The matrix is not a full product:
 | Job | JDK | Kafka |
 |---|---|---|
 | Unit and engine pairs | 17, 21, 25 | (none) |
-| Broker tests, KRaft | 17, 21 and 25 (they take seconds, so they run with the unit tests) | 3.3, the first with production KRaft; 3.9; 4.0; 4.3 (an `apache/kafka` image in use); the newest 4.x |
+| Broker tests, KRaft | 17, 21 and 25 (they take seconds, so they run with the unit tests) | 3.3, the first with production KRaft; 3.9; 4.0; 4.3 (4.3.2; a broker on the `apache/kafka` 4.3.1 image uses the library); the newest 4.x |
 | Broker tests, ZooKeeper (`AclAuthorizer`) | 17 and 25 | 3.0, 3.9 |
 | Clients across versions | 17 | a 3.0 client and a newest 4.x broker; a newest 4.x client and a 3.9 broker |
 | End to end | the image's | newest 3.x and 4.x images |

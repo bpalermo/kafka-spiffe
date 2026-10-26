@@ -252,20 +252,21 @@ A broker that gets its SVIDs from [java-spiffe](https://github.com/spiffe/java-s
 | `KAFKA_OPTS` | `-Dspiffe.newX509Source.timeout=PT120S` | `spiffe.startup.timeout.ms=120000` |
 | `KAFKA_OPTS` | `-Djava.util.logging.config.file=…` for the provider's own log | nothing: the library logs through slf4j, under `io.github.bpalermo.kafka.spiffe`, with Kafka's logging configuration |
 | `server.properties` | `listener.name.mtls.ssl.keymanager.algorithm=Spiffe` and `listener.name.mtls.ssl.trustmanager.algorithm=Spiffe` | `ssl.engine.factory.class` and `principal.builder.class`, unprefixed (they apply to the TLS listeners only) |
-| `server.properties` | `listener.name.mtls.ssl.client.auth=required` | the same |
-| Environment | `SPIFFE_ENDPOINT_SOCKET` | the same: the library reads it when `spiffe.endpoint.socket` is not set |
+| `server.properties` | `listener.name.mtls.ssl.client.auth=required` | `ssl.client.auth=required`, unprefixed like the other two; the listener-prefixed form also reaches the factory, but one place for all three is easier to read |
+| Environment | `SPIFFE_ENDPOINT_SOCKET` | `spiffe.endpoint.socket` in `server.properties`, so the broker's whole configuration is in one file; the library still reads `SPIFFE_ENDPOINT_SOCKET` when the key is not set |
 
-`spiffe.*` keys are set unprefixed only: there is no `listener.name.mtls.spiffe.*`. After the swap, `server.properties` has, in place of the two algorithm keys:
+`spiffe.*` keys are set unprefixed only: there is no `listener.name.mtls.spiffe.*`. After the swap, `server.properties` has, in place of the two algorithm keys and the prefixed `ssl.client.auth`:
 
 ```properties
 ssl.engine.factory.class=io.github.bpalermo.kafka.spiffe.kafka.SpiffeSslEngineFactory
 principal.builder.class=io.github.bpalermo.kafka.spiffe.kafka.SpiffePrincipalBuilder
-listener.name.mtls.ssl.client.auth=required
+ssl.client.auth=required
+spiffe.endpoint.socket=unix:///run/spire/sockets/agent.sock
 spiffe.peer.allowed.trust.domains=nas.example.org,k8s.example.org
 spiffe.startup.timeout.ms=120000
 ```
 
-- **`acceptAll` has no equivalent.** It accepted every trust domain whose bundle the agent delivers, so a newly federated trust domain was let in without a change on the broker. Here every trust domain is listed: the broker's own and each federated one, and a new federation means a new entry and a restart.
+- **`acceptAll` has no equivalent.** It accepted every trust domain whose bundle the agent delivers, so a newly federated trust domain was let in without a change on the broker. Here the allow-list is explicit, and a new federation means a new entry and a restart. Either list every trust domain, the broker's own and each federated one, as above; or, narrower, allow only the workloads that should connect, by `spiffe.peer.allowed.ids` and `spiffe.peer.allowed.id.patterns` (for instance `spiffe://k8s.example.org/ns/*/sa/**`), together with the broker's own ID.
 - **With no authorizer, the swap is one restart.** Principals decide nothing, so there are no ACLs to move; the steps above apply only once an authorizer is added. `principal.builder.class` is there so that the principals are `Spiffe:` ones when that day comes, and to check the swap now: with `io.github.bpalermo.kafka.spiffe.kafka.SpiffePrincipalBuilder` at `DEBUG`, each connection logs `spiffe://… on listener MTLS from /10.0.0.5 gets Spiffe:spiffe://…` once. `peer-verification`'s `accepted-total` counts the same handshakes ([JMX](#jmx)).
 - **Clients need no change.** A client on java-spiffe's provider or on spiffe-helper's PEM files presents the same SVID as before and finds the broker's SVID unchanged: same SPIFFE ID, same bundles. The switched broker verifies the client's SVID against its allow-list. Tests check clients on PEM files against a switched broker, and a provider client sends the same certificates.
 - **An expired SVID:** the provider goes on serving it with nothing in Kafka's log. The library also keeps serving it by default (`spiffe.svid.expired=present`), but logs an error and a warning before it ([Logs](#logs)), and `spiffe.svid.expired=fail` refuses new connections instead.
