@@ -443,6 +443,12 @@ class BrokerTest {
   private KafkaProducer<String, String> producer(FakeWorkloadApi agent) {
     Map<String, Object> configs = clientConfigs(agent);
     configs.put("acks", "all");
+    // Idempotence (the default from 3.0) has the producer ask a broker for a producer ID first,
+    // which needs a write ACL there: refused by a broker that has not yet applied the ACL, or at
+    // all for OUTSIDER, the producer is left in a fatal error state and send throws at once, which
+    // send() below cannot retry. The records alone say what each broker allows (as in
+    // MigrationTest); CrossVersionTest's client keeps the idempotent default.
+    configs.put("enable.idempotence", "false");
     KafkaProducer<String, String> producer =
         new KafkaProducer<>(configs, new StringSerializer(), new StringSerializer());
     closeables.add(producer);

@@ -34,6 +34,9 @@ import javax.management.JMException;
 import javax.management.ObjectName;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.acl.AccessControlEntry;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
@@ -42,6 +45,7 @@ import org.apache.kafka.common.acl.AclPermissionType;
 import org.apache.kafka.common.resource.PatternType;
 import org.apache.kafka.common.resource.ResourcePattern;
 import org.apache.kafka.common.resource.ResourceType;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -144,6 +148,10 @@ class CrossVersionTest {
     }
 
     FakeWorkloadApi appAgent = agent("app.sock", APP, CLIENT_CA, BROKER_CA);
+    // The client's producer is idempotent, the default, and asks the broker for a producer ID as
+    // it starts, which a broker without the ACL refuses fatally: so a producer of APP's, in this
+    // JVM and idempotent too, has a record acknowledged first.
+    probe(appAgent);
     List<String> classPath =
         List.of(
             property("jar.binary"),
@@ -211,6 +219,29 @@ class CrossVersionTest {
             .svid(FakeWorkloadApi.Svid.of(svid(BROKER, BROKER_CA), BROKER_CA))
             .federated("spiffe://k8s.example.org", clientRoots));
     eventually(() -> updates() > updates, "the broker's source takes the update");
+  }
+
+  /**
+   * Has a record of {@code agent}'s identity acknowledged by a new idempotent producer, a new one
+   * for each try, until the broker allows it.
+   */
+  private void probe(FakeWorkloadApi agent) throws InterruptedException {
+    eventually(
+        () -> {
+          Map<String, Object> configs = clientConfigs(agent);
+          configs.put("max.block.ms", "5000");
+          try (KafkaProducer<String, String> producer =
+              new KafkaProducer<>(configs, new StringSerializer(), new StringSerializer())) {
+            producer.send(new ProducerRecord<>(TOPIC, 0, "probe", "probe")).get();
+            return true;
+          } catch (ExecutionException | KafkaException e) {
+            return false;
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+          }
+        },
+        "the broker allows APP to produce");
   }
 
   /** The driver's next line of output, within {@link #WAIT}. */
