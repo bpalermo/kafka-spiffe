@@ -19,6 +19,12 @@ build --tool_java_runtime_version=remotejdk_25
 # run under `bazel test`.
 run --java_runtime_version=remotejdk_25
 
+# The release workflow builds, signs and publishes with --config=release. Without it,
+# `bazel run //:kafka-spiffe.publish` would compile the library against the JDK 25 class
+# library (the line above): bytes that differ from the jar the verify job tested and the
+# GitHub release signs, and a later API that compiles. The workflow checks the hashes.
+build:release --java_runtime_version=remotejdk_17
+
 # Run the tests on another JDK (usage: bazel test --config=jdk21 //...). Only the
 # runtime changes: the bytecode stays Java 17.
 build:jdk17 --java_runtime_version=remotejdk_17

@@ -54,9 +54,15 @@ jobs:
   # Every test of CI, with the release version in place: the build, unit and
   # version tests, the jar beside a broker's libs/, and the end-to-end tests
   # against a real SPIRE.
+  #
+  # It also records the sha256 of the jar and POM, built as the release builds
+  # them (--config=release), and the jobs below publish and sign only those bytes.
   verify:
     needs: plan
     runs-on: ubuntu-latest
+    outputs:
+      jar: ${{ steps.artifact.outputs.jar }}
+      pom: ${{ steps.artifact.outputs.pom }}
     env:
       RELEASE_VERSION: ${{ needs.plan.outputs.version }}
     steps:
@@ -76,6 +82,12 @@ jobs:
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_3_0_test
           //src/test/java/io/github/bpalermo/kafka/spiffe/jar:jar_classpath_libs_4_4_test
       - run: bazel test --config=ci --config=e2e //...
+      - name: The jar and POM the release publishes
+        id: artifact
+        run: |
+          set -euo pipefail
+          bazel build --config=ci --config=release //:kafka-spiffe-maven-artifact //:kafka-spiffe-pom
+          scripts/artifact-digests.sh | tee -a "${GITHUB_OUTPUT}"
 
   # io.github.bpalermo:kafka-spiffe on Maven Central.
   #
@@ -112,8 +124,23 @@ jobs:
           disk-cache: release-maven
           repository-cache: true
           cache-save: false
-      # Built before any credential exists on the runner.
-      - run: bazel build --config=ci //:kafka-spiffe.publish
+      # Built before any credential exists on the runner, as `bazel run` builds it
+      # (--config=release keeps the JDK 17 class library under `bazel run`): the
+      # script it writes is what the upload runs, so nothing is built in between.
+      - run: bazel run --config=ci --config=release --script_path=publish.sh //:kafka-spiffe.publish
+      - name: Refuse bytes the verify job did not record
+        env:
+          VERIFIED_JAR: ${{ needs.verify.outputs.jar }}
+          VERIFIED_POM: ${{ needs.verify.outputs.pom }}
+        run: |
+          set -euo pipefail
+          expected="$(printf 'jar=%s\npom=%s' "${VERIFIED_JAR}" "${VERIFIED_POM}")"
+          actual="$(scripts/artifact-digests.sh)"
+          if [ "${actual}" != "${expected}" ]; then
+            printf '::error::the jar or POM to publish is not the one verify built\nverify:\n%s\nhere:\n%s\n' "${expected}" "${actual}" >&2
+            exit 1
+          fi
+          echo "${actual}"
       - name: Upload
         env:
           MAVEN_REPO: ${{ env.STAGING }}/service/local/staging/deploy/maven2/
@@ -122,7 +149,7 @@ jobs:
           USE_IN_MEMORY_PGP_KEYS: "true"
           PGP_SIGNING_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           PGP_SIGNING_PWD: ${{ secrets.GPG_PASSPHRASE }}
-        run: bazel run --config=ci //:kafka-spiffe.publish
+        run: ./publish.sh
       # The staging API keeps an upload under the token, the namespace and the
       # runner's address, so this runs in the same job as the upload.
       - name: Hand the deployment to the Portal, and follow it until published
@@ -225,11 +252,24 @@ jobs:
       - name: Build the jar and POM
         run: |
           set -euo pipefail
-          bazel build --config=ci //:kafka-spiffe-maven-artifact //:kafka-spiffe-pom
+          bazel build --config=ci --config=release //:kafka-spiffe-maven-artifact //:kafka-spiffe-pom
           mkdir dist
-          cp "$(bazel cquery --config=ci //:kafka-spiffe-maven-artifact --output=files 2>/dev/null)" "dist/kafka-spiffe-${RELEASE_VERSION}.jar"
-          cp "$(bazel cquery --config=ci //:kafka-spiffe-pom --output=files 2>/dev/null)" "dist/kafka-spiffe-${RELEASE_VERSION}.pom"
+          cp "$(bazel cquery --config=ci --config=release //:kafka-spiffe-maven-artifact --output=files 2>/dev/null)" "dist/kafka-spiffe-${RELEASE_VERSION}.jar"
+          cp "$(bazel cquery --config=ci --config=release //:kafka-spiffe-pom --output=files 2>/dev/null)" "dist/kafka-spiffe-${RELEASE_VERSION}.pom"
           ls -l dist
+      - name: Refuse bytes the verify job did not record
+        env:
+          VERIFIED_JAR: ${{ needs.verify.outputs.jar }}
+          VERIFIED_POM: ${{ needs.verify.outputs.pom }}
+        run: |
+          set -euo pipefail
+          expected="$(printf 'jar=%s\npom=%s' "${VERIFIED_JAR}" "${VERIFIED_POM}")"
+          actual="$(scripts/artifact-digests.sh)"
+          if [ "${actual}" != "${expected}" ]; then
+            printf '::error::the jar or POM to sign is not the one verify built\nverify:\n%s\nhere:\n%s\n' "${expected}" "${actual}" >&2
+            exit 1
+          fi
+          echo "${actual}"
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.1.3
@@ -249,4 +289,4 @@ jobs:
             --verify-tag \
             --generate-notes \
             --title "${GITHUB_REF_NAME}" \
-            --notes "io.github.bpalermo:kafka-spiffe:${RELEASE_VERSION}. Each file has a cosign bundle (.sigstore.json); verify with cosign verify-blob --bundle <file>.sigstore.json --certificate-identity https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF} --certificate-oidc-issuer https://token.actions.githubusercontent.com <file>"
+            --notes "io.github.bpalermo:kafka-spiffe:${RELEASE_VERSION}. The jar and POM attached here are the same bytes as on Maven Central, where they are signed with the release key (.asc). Each file attached here has a cosign bundle (.sigstore.json); verify with cosign verify-blob --bundle <file>.sigstore.json --certificate-identity https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF} --certificate-oidc-issuer https://token.actions.githubusercontent.com <file>"
